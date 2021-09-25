@@ -55,7 +55,7 @@ void loop(){
   } 
 
   //*******************************starter on command***************************
-  if(textMessage.indexOf("ON")>=0){
+  if(textMessage.indexOf("On")>=0){
     // Turn on relay and save current state
     digitalWrite(relay, LOW);
     lampState = "on";
@@ -70,7 +70,7 @@ void loop(){
 //****************************starter off command*******************************
 
 
-  if(textMessage.indexOf("OFF")>=0){
+  if(textMessage.indexOf("Off")>=0){
     // Turn off relay and save current state
     digitalWrite(relay2,LOW );
     lampState = "off"; 
