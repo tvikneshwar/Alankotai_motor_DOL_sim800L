@@ -1,6 +1,7 @@
 // refrence link: http://www.raviyp.com/arduino-mqtt-library-with-publish-and-subscribe-example/
 
 
+
 #include <SoftwareSerial.h>
 #define STARTER_DELAY 2000
 
@@ -132,6 +133,7 @@ void SendSubscribePacket(void) {
   SIM900.write(MQTTQOS);
   SIM900.write(0x1A);
 }
+
 void loop() {
   SIM900.print("AT+CIPSHUT\r\n");
   delay(2000);
@@ -148,13 +150,28 @@ void loop() {
   SendSubscribePacket();
   delay(5000);
   while (1) {
+
     if (Serial.available() > 0) {
       str[0] = Serial.read();
       SIM900.write(str[0]);
+      //commands to react
       if (str[0] == 'N')
         digitalWrite(led, HIGH);
       if (str[0] == 'F')
         digitalWrite(led, LOW);
+        //relay 1 ( on )
+      if (str[0] == 'On'){
+        digitalWrite(relay, LOW);
+        delay(STARTER_DELAY); 
+        digitalWrite(relay, HIGH);
+    }
+       //relay 2 (off)
+    if (str[0] == 'Off'){
+        digitalWrite(relay2, LOW);
+        delay(STARTER_DELAY); 
+        digitalWrite(relay2, HIGH);
+    }
+
     }
   }
 }
