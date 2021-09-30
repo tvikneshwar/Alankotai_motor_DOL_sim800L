@@ -1,5 +1,16 @@
 // refrence link: http://www.raviyp.com/arduino-mqtt-library-with-publish-and-subscribe-example/
 
+
+#include <SoftwareSerial.h>
+#define STARTER_DELAY 2000
+
+// Configure software serial port
+SoftwareSerial SIM900(3, 2);
+
+// Relay connected to pin 12
+const int relay = A0;
+const int relay2 = A1;
+
 int led = 13;
 unsigned int Counter = 0;
 unsigned long datalength, CheckSum, RLength;
@@ -12,28 +23,33 @@ unsigned short MQTTProtocolNameLength;
 unsigned short MQTTClientIDLength;
 unsigned short MQTTUsernameLength;
 unsigned short MQTTPasswordLength;
-const char MQTTHost[30] = "io.adafruit.com";
+const char MQTTHost[30] = "broker.hivemq.com";
 const char MQTTPort[10] = "1883";
 const char MQTTClientID[20] = "ABCDEF";
-const char MQTTTopic[30] = "raviypujar/feeds/switchfeed";
+const char MQTTTopic[30] = "viky";
 const char MQTTProtocolName[10] = "MQTT";
 const char MQTTLVL = 0x03;
 const char MQTTFlags = 0xC2;
 const unsigned int MQTTKeepAlive = 60;
-const char MQTTUsername[30] = "raviypujar";
-const char MQTTPassword[35] = "993df7b916494d19b430d53cfcbe677d";
+const char MQTTUsername[30] = "";
+const char MQTTPassword[35] = "";
 const char MQTTQOS = 0x00;
 const char MQTTPacketID = 0x0001;
 void setup() {
   pinMode(led, OUTPUT);
+   digitalWrite(relay, HIGH);
+  digitalWrite(relay2, HIGH);
+
   Serial.begin(9600);
-  Serial.println("Arduino MQTT Tutorial, Valetron Systems @www.raviyp.com ");
+  SIM900.begin(19200);
   delay(3000);
 }
 void SendConnectPacket(void) {
-  Serial.print("\r\nAT+CIPSEND\r\n");
+
+  
+  SIM900.print("\r\nAT+CIPSEND\r\n");
   delay(3000);
-  Serial.write(0x10);
+  SIM900.write(0x10);
   MQTTProtocolNameLength = strlen(MQTTProtocolName);
   MQTTClientIDLength = strlen(MQTTClientID);
   MQTTUsernameLength = strlen(MQTTUsername);
@@ -46,35 +62,35 @@ void SendConnectPacket(void) {
     if (X > 0) {
       encodedByte |= 128;
     }
-    Serial.write(encodedByte);
+    SIM900.write(encodedByte);
   }
   while (X > 0);
-  Serial.write(MQTTProtocolNameLength >> 8);
-  Serial.write(MQTTProtocolNameLength & 0xFF);
-  Serial.print(MQTTProtocolName);
-  Serial.write(MQTTLVL); // LVL
-  Serial.write(MQTTFlags); // Flags
-  Serial.write(MQTTKeepAlive >> 8);
-  Serial.write(MQTTKeepAlive & 0xFF);
-  Serial.write(MQTTClientIDLength >> 8);
-  Serial.write(MQTTClientIDLength & 0xFF);
-  Serial.print(MQTTClientID);
-  Serial.write(MQTTUsernameLength >> 8);
-  Serial.write(MQTTUsernameLength & 0xFF);
-  Serial.print(MQTTUsername);
-  Serial.write(MQTTPasswordLength >> 8);
-  Serial.write(MQTTPasswordLength & 0xFF);
-  Serial.print(MQTTPassword);
-  Serial.write(0x1A);
+  SIM900.write(MQTTProtocolNameLength >> 8);
+  SIM900.write(MQTTProtocolNameLength & 0xFF);
+  SIM900.print(MQTTProtocolName);
+  SIM900.write(MQTTLVL); // LVL
+  SIM900.write(MQTTFlags); // Flags
+  SIM900.write(MQTTKeepAlive >> 8);
+  SIM900.write(MQTTKeepAlive & 0xFF);
+  SIM900.write(MQTTClientIDLength >> 8);
+  SIM900.write(MQTTClientIDLength & 0xFF);
+  SIM900.print(MQTTClientID);
+  SIM900.write(MQTTUsernameLength >> 8);
+  SIM900.write(MQTTUsernameLength & 0xFF);
+  SIM900.print(MQTTUsername);
+  SIM900.write(MQTTPasswordLength >> 8);
+  SIM900.write(MQTTPasswordLength & 0xFF);
+  SIM900.print(MQTTPassword);
+  SIM900.write(0x1A);
 }
 void SendPublishPacket(void) {
-  Serial.print("\r\nAT+CIPSEND\r\n");
+  SIM900.print("\r\nAT+CIPSEND\r\n");
   delay(3000);
   memset(str, 0, 250);
   topiclength = sprintf((char * ) topic, MQTTTopic);
   datalength = sprintf((char * ) str, "%s%u", topic, Counter);
   delay(1000);
-  Serial.write(0x30);
+  SIM900.write(0x30);
   X = datalength + 2;
   do {
     encodedByte = X % 128;
@@ -82,22 +98,22 @@ void SendPublishPacket(void) {
     if (X > 0) {
       encodedByte |= 128;
     }
-    Serial.write(encodedByte);
+    SIM900.write(encodedByte);
   }
   while (X > 0);
-  Serial.write(topiclength >> 8);
-  Serial.write(topiclength & 0xFF);
-  Serial.print(str);
-  Serial.write(0x1A);
+  SIM900.write(topiclength >> 8);
+  SIM900.write(topiclength & 0xFF);
+  SIM900.print(str);
+  SIM900.write(0x1A);
 }
 void SendSubscribePacket(void) {
-  Serial.print("\r\nAT+CIPSEND\r\n");
+  SIM900.print("\r\nAT+CIPSEND\r\n");
   delay(3000);
   memset(str, 0, 250);
   topiclength = strlen(MQTTTopic);
   datalength = 2 + 2 + topiclength + 1;
   delay(1000);
-  Serial.write(0x82);
+  SIM900.write(0x82);
   X = datalength;
   do {
     encodedByte = X % 128;
@@ -105,27 +121,27 @@ void SendSubscribePacket(void) {
     if (X > 0) {
       encodedByte |= 128;
     }
-    Serial.write(encodedByte);
+    SIM900.write(encodedByte);
   }
   while (X > 0);
-  Serial.write(MQTTPacketID >> 8);
-  Serial.write(MQTTPacketID & 0xFF);
-  Serial.write(topiclength >> 8);
-  Serial.write(topiclength & 0xFF);
-  Serial.print(MQTTTopic);
-  Serial.write(MQTTQOS);
-  Serial.write(0x1A);
+  SIM900.write(MQTTPacketID >> 8);
+  SIM900.write(MQTTPacketID & 0xFF);
+  SIM900.write(topiclength >> 8);
+  SIM900.write(topiclength & 0xFF);
+  SIM900.print(MQTTTopic);
+  SIM900.write(MQTTQOS);
+  SIM900.write(0x1A);
 }
 void loop() {
-  Serial.print("AT+CIPSHUT\r\n");
+  SIM900.print("AT+CIPSHUT\r\n");
   delay(2000);
-  Serial.print("AT+CSTT=\"www\",\"\",\"\"\r\n");
+  SIM900.print("AT+CSTT=\"www\",\"\",\"\"\r\n");
   delay(1000);
-  Serial.print("AT+CIPMODE=0\r\n");
+  SIM900.print("AT+CIPMODE=0\r\n");
   delay(1000);
-  Serial.print("AT+CIICR\r\n");
+  SIM900.print("AT+CIICR\r\n");
   delay(9000);
-  Serial.print("AT+CIPSTART=\"TCP\",\"io.adafruit.com\",\"1883\"\r\n");
+  SIM900.print("AT+CIPSTART=\"TCP\",\"broker.hivemq.com\",\"1883\"\r\n");
   delay(6000);
   SendConnectPacket();
   delay(5000);
@@ -134,7 +150,7 @@ void loop() {
   while (1) {
     if (Serial.available() > 0) {
       str[0] = Serial.read();
-      Serial.write(str[0]);
+      SIM900.write(str[0]);
       if (str[0] == 'N')
         digitalWrite(led, HIGH);
       if (str[0] == 'F')
