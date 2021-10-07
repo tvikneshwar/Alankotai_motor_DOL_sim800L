@@ -80,7 +80,7 @@ SoftwareSerial SerialAT(3, 2); // RX, TX
 #define GSM_PIN ""
 
 // Your GPRS credentials, if any
-const char apn[] = "YourAPN";
+const char apn[] = "bsnlnet";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
 
