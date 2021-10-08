@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Demo</title>
+	</head>
+<body>
+	<h1>Changing the Image</h1>
+    <img src="motor-green.PNG" id="myImage" width="200" height="100">
+	<img src="pipe-green.PNG" id="myImage2" width="175" height="100">
+	
+	
+	
+	
+    <input type="button" onclick="changeImage()" value="Change" />
+    <script>
+        function changeImage() {
+            var image = document.getElementById('myImage');
+            if (image.src.match("motor-green.PNG")) {
+                image.src = "motor-red.PNG";
+            }
+            else {
+                image.src = "motor-green.PNG";
+            }
+        }
+		function changeImage2() {
+            var image = document.getElementById('myImage2');
+            if (image.src.match("pipe-green.PNG")) {
+                image.src = "pipe-red.PNG";
+            }
+            else {
+                image.src = "pipe-green.PNG";
+            }
+        }
+    </script>
+
+</body>
+</html>
