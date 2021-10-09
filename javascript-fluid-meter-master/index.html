@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link href="https://fonts.googleapis.com/css?family=Oxygen|Raleway&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css"
+    integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous">
+  <script src="./js/js-fluid-meter.js"></script>
+  <title>Dashboard</title>
+</head>
+
+
+<body>  
+
+
+
+
+
+    <div class="row">
+    </div>
+       <div class="col  text-center">
+        <div id="fluid-meter-3"></div>
+        
+		<button id="submit-percentage-3">submitt</button>
+      </div>
+    </div>
+	
+  
+   </div>
+  </div>
+        <button id="submit-percentage-3">Pump-on/off</button>
+       <img src="motor-green.PNG" id="myImage" width="200" height="100">
+	  
+      </div>
+  </div>  
+  
+     </div>
+  </div>
+         <button id="submit-percentage-3">v1-on/off</button>
+	     <img src="green-valve1.PNG" id="myImage" width="50" height="50"> 
+     </div>
+  </div>
+  
+  
+  
+  
+   <div align="right">
+   <div class="container">
+   
+    <div class="column">
+         
+	     <img src="green-valve2.PNG" id="myImage" width="100" height="100"> 
+		 <button id="submit-percentage-2">v2-on/off</button>
+     </div>
+  </div>
+  </div>
+  </div>
+  
+   <DIV align="right">
+   <div class="container">
+    <div class="column">
+         
+	     <img src="red-valve1.PNG" id="myImage" width="100" height="100"> 
+		 <button id="submit-percentage-2">v2-on/off</button>
+     </div>
+  </div>
+
+   <DIV align="right">
+   <div class="container">
+    <div class="column">
+         
+	     <img src="red-valve1.PNG" id="myImage" width="100" height="100"> 
+		 <button id="submit-percentage-2">v2-on/off</button>
+     </div>
+  </div>
+  
+   
+  
+  
+
+  <script>
+  
+    var fm3 = new FluidMeter();
+    fm3.init({
+      targetContainer: document.getElementById("fluid-meter-3"),
+      fillPercentage: 15,
+      options: {
+        fontSize: "30px",
+        drawPercentageSign: true,
+        drawBubbles: false,
+        size: 300,
+        borderWidth: 19,
+        backgroundColor: "#e2e2e2",
+        foregroundColor: "#fafafa",
+        foregroundFluidLayer: {
+          fillStyle: "#16E1FF",
+          angularSpeed: 30,
+          maxAmplitude: 5,
+          frequency: 30,
+          horizontalSpeed: -20
+        },
+        backgroundFluidLayer: {
+          fillStyle: "#4F8FC6",
+          angularSpeed: 50,
+          maxAmplitude: 3,
+          frequency: 22,
+          horizontalSpeed: 20
+        }
+      }
+    });
+
+    window.onload = function () {
+      
+      document.getElementById("submit-percentage-3").onclick = function () {
+        fm3.setPercentage(Number(document.getElementById('percentage-3').value))
+      }
+    };
+  </script>
+</body>
+
+</html>
