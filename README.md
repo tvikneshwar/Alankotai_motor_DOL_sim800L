@@ -1,3 +1,8 @@
+water tank link:
+https://www.cssscript.com/liquid-progress-indicator/
+https://codepen.io/JavRok/pen/EXMyXW
+https://www.webfx.com/blog/web-design/animated-svg-pipes/
+
 png editing tool:
 https://onlinepngtools.com/create-transparent-png
 
