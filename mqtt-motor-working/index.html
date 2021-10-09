@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+
+	<head>
+		<meta charset="UTF-8">
+		<title>MQTT JavaScript Button</title>
+	</head>
+
+	<body>
+
+	
+	    <h1>Changing the Image</h1>
+    <img src="motor-green.PNG" id="myImage" width="200" height="100">  
+	
+		<h2 align=center>Click the button Immage color will change</h2>
+		<h3 id="led_status">Waiting for Status.</h3>
+
+		<button id="status_button" type="button" onclick="led_toggle();">Click Me to Toggle LED Display!</button> 	
+
+		<!-- Source Paho MQTT Client-->
+		<script src="lib/mqttws31.js"></script>
+		<!-- Our Code Goes Here -->
+		<script src="button_test.js"></script>
+		<!-- Start it up! -->
+		<script>connect();</script>
+
+	</body>
+</html>
