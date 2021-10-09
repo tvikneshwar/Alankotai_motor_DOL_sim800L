@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>javascript change image onclick event
+</title>
+<style type="text/css">
+	h2 {
+    text-align: center;
+    font-size: 30px;
+	}
+	img#getImage {
+    width: 300px;
+    height: auto;  
+    border: 4px solid #a1a1a1;  
+	}
+	div {
+    text-align: center;
+	}
+</style>
+</head>
+<body>
+	<div>
+		<h2>Change image onClick event here...</h2>
+		<img src="motor-green.PNG" onmouseover="imagefun()" id="getImage">
+    	
+    </div>
+    <script>
+        function imagefun() {
+            var Image_Id = document.getElementById('getImage');
+            if (Image_Id.src.match("motor-green.PNG")) {
+                Image_Id.src = "motor-red.PNG";
+            }
+            else {
+                Image_Id.src = "motor-green.PNG";
+            }
+        }        
+    </script>
+
+</body>
+</html>
