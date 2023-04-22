@@ -1,11 +1,8 @@
-// CODED BY VIKNESHWAR THANDESWARAN 
-// 22-04-2023 GANAPATHIPURAM 
-
 #include <SoftwareSerial.h>
 #define STARTER_DELAY 2000
 
 // Configure software serial port
-SoftwareSerial SIM900(3, 2);
+SoftwareSerial SIM900(D4, D3); //D3,D4 RX, TX
 
 // Variable to store text message
 String textMessage;
@@ -13,24 +10,19 @@ String textMessage;
 // Create a variable to store Lamp state
 String lampState = "HIGH";
 
-// Relay connected to pin 12
-const int relay = D1;
-const int relay2 =D2;
+// Relay connected to pin 
+const int relay = D1;//D1
+const int relay2 = D2;//D2
 
 void setup() {
-  // Automatically turn on the shield
-  //digitalWrite(9, HIGH);
-  //delay(1000);
-  //digitalWrite(9, LOW);
-   delay(5000);
-  
   // Set relay as OUTPUT
   pinMode(relay, OUTPUT);
-   pinMode(relay2, OUTPUT);
+  pinMode(relay2, OUTPUT);
 
   // By default the relay is off
   digitalWrite(relay, HIGH);
   digitalWrite(relay2, HIGH);
+
   // Initializing serial commmunication
   Serial.begin(19200); 
   SIM900.begin(19200);
@@ -63,12 +55,10 @@ void loop(){
     delay(STARTER_DELAY); 
     digitalWrite(relay, HIGH);
 
-        
     textMessage = "";   
   }
 
 //****************************starter off command*******************************
-
 
   if(textMessage.indexOf("Off")>=0){
     // Turn off relay and save current state
@@ -81,10 +71,7 @@ void loop(){
     textMessage = ""; 
   }
 
-
-
 //******************************sTATUS***********************************************
-
 
   if(textMessage.indexOf("STATE")>=0){
     String message = "Lamp is " + lampState;
@@ -93,9 +80,7 @@ void loop(){
     textMessage = "";
   }
 
-
 //******************************************************************************
-
 
 }  
 
@@ -107,7 +92,7 @@ void sendSMS(String message){
 
   // REPLACE THE X's WITH THE RECIPIENT'S MOBILE NUMBER
   // USE INTERNATIONAL FORMAT CODE FOR MOBILE NUMBERS
-  SIM900.println("AT + CMGS = \"+917810010503\""); 
+  SIM900.println("AT+CMGS=\"+917810010503\""); 
   delay(100);
   // Send the SMS
   SIM900.println(message); 
