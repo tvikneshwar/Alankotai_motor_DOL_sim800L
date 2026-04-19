@@ -1,3 +1,5 @@
+
+
 #include <EEPROM.h>
 
 // ---------------- CONFIG ----------------
@@ -14,6 +16,8 @@
 #define MAX_NUMBERS 10
 #define NUMBER_LENGTH 15
 
+#define SMS_VALID_WINDOW 120000   // 2 minutes (ms)
+
 HardwareSerial sim800(2);
 
 // ---------------- ADMIN ----------------
@@ -27,6 +31,8 @@ String callNumber = "";
 bool newSMS = false;
 bool incomingCall = false;
 bool motorState = false;
+
+unsigned long smsReceiveMillis = 0;
 
 String storedNumbers[MAX_NUMBERS];
 
@@ -45,20 +51,19 @@ void setup() {
   sim800.begin(9600, SERIAL_8N1, SIM800_RX, SIM800_TX);
 
   EEPROM.begin(EEPROM_SIZE);
-  loadNumbers();   // ✅ Load stored numbers (no clearing)
+  loadNumbers();
 
   delay(3000);
 
-  // -------- SIM INIT --------
   sendAT("AT");
   sendAT("AT+CNMP=13");
   sendAT("AT+CMNB=1");
 
   sendAT("AT+CMGF=1");
-  sendAT("AT+CNMI=1,2,0,0,0");
+  sendAT("AT+CNMI=1,2,0,0,0");   // live SMS
   sendAT("AT+CLIP=1");
 
-  sendAT("AT+CMGD=1,4");
+  sendAT("AT+CMGD=1,4");         // delete old SMS
 
   Serial.println("System Ready...");
 }
@@ -77,7 +82,7 @@ void loop() {
       Serial.println("RAW:");
       Serial.println(smsBuffer);
 
-      // -------- CALL --------
+      // CALL
       if (smsBuffer.startsWith("RING")) {
         incomingCall = true;
       }
@@ -89,11 +94,14 @@ void loop() {
         }
       }
 
-      // -------- SMS --------
+      // SMS HEADER
       else if (smsBuffer.startsWith("+CMT:")) {
         extractSender(smsBuffer);
         newSMS = true;
+        smsReceiveMillis = millis();   // ✅ capture arrival time
       }
+
+      // SMS BODY
       else if (newSMS) {
         processSMS(smsBuffer);
         newSMS = false;
@@ -104,7 +112,7 @@ void loop() {
   }
 }
 
-// ---------------- NORMALIZE NUMBER ----------------
+// ---------------- NORMALIZE ----------------
 String normalizeNumber(String num) {
   num.trim();
   num.replace("\"", "");
@@ -117,7 +125,7 @@ String normalizeNumber(String num) {
   return num;
 }
 
-// ---------------- EEPROM LOAD ----------------
+// ---------------- EEPROM ----------------
 void loadNumbers() {
   int addr = 0;
 
@@ -126,19 +134,13 @@ void loadNumbers() {
 
     for (int j = 0; j < NUMBER_LENGTH; j++) {
       char c = EEPROM.read(addr++);
-
-      if (c >= 32 && c <= 126) {
-        storedNumbers[i] += c;
-      }
+      if (c >= 32 && c <= 126) storedNumbers[i] += c;
     }
 
     storedNumbers[i].trim();
-
-    Serial.println("Slot " + String(i) + ": " + storedNumbers[i]);
   }
 }
 
-// ---------------- EEPROM SAVE ----------------
 void saveNumbers() {
   int addr = 0;
 
@@ -154,7 +156,7 @@ void saveNumbers() {
   EEPROM.commit();
 }
 
-// ---------------- ACCESS CONTROL ----------------
+// ---------------- ACCESS ----------------
 bool isAllowed(String number) {
   number = normalizeNumber(number);
 
@@ -166,7 +168,7 @@ bool isAllowed(String number) {
   return false;
 }
 
-// ---------------- ADD ----------------
+// ---------------- ADD / DELETE ----------------
 bool addNumber(String num) {
   num = normalizeNumber(num);
 
@@ -185,7 +187,6 @@ bool addNumber(String num) {
   return false;
 }
 
-// ---------------- DELETE ----------------
 bool deleteNumber(String num) {
   num = normalizeNumber(num);
 
@@ -221,13 +222,26 @@ void extractCallNumber(String data) {
   }
 }
 
-// ---------------- SMS PROCESS ----------------
+// ---------------- TIME CHECK (FIXED) ----------------
+bool isRecentSMS() {
+  unsigned long diff = millis() - smsReceiveMillis;
+
+  Serial.println("Local diff(ms): " + String(diff));
+
+  return diff <= SMS_VALID_WINDOW;
+}
+
+// ---------------- SMS ----------------
 void processSMS(String data) {
 
   data.trim();
   data.toUpperCase();
 
-  // -------- ADMIN --------
+  if (!isRecentSMS()) {
+    sendSMS(senderNumber, "Expired SMS");
+    return;
+  }
+
   if (senderNumber == adminNumber) {
 
     if (data.startsWith("ADD,")) {
@@ -244,21 +258,15 @@ void processSMS(String data) {
 
     if (data == "LIST") {
       String msg = "Numbers:\n";
-
       for (int i = 0; i < MAX_NUMBERS; i++) {
-        if (storedNumbers[i] != "")
-          msg += storedNumbers[i] + "\n";
+        if (storedNumbers[i] != "") msg += storedNumbers[i] + "\n";
       }
-
       sendSMS(senderNumber, msg);
       return;
     }
   }
 
-  if (!isAllowed(senderNumber)) {
-    Serial.println("Unauthorized SMS");
-    return;
-  }
+  if (!isAllowed(senderNumber)) return;
 
   if (data == "ON") {
     startMotor();
@@ -322,7 +330,7 @@ void sendSMS(String number, String msg) {
   delay(3000);
 }
 
-// ---------------- SIM HEALTH ----------------
+// ---------------- SIM ----------------
 bool checkSIM() {
   sim800.println("AT");
   delay(1000);
@@ -341,7 +349,6 @@ void ensureSIMWorking() {
 
   if (millis() - lastCheck > 30000) {
     lastCheck = millis();
-
     if (!checkSIM()) resetSIM800();
   }
 }
@@ -351,7 +358,5 @@ void sendAT(String cmd) {
   sim800.println(cmd);
   delay(1000);
 
-  while (sim800.available()) {
-    Serial.write(sim800.read());
-  }
+  while (sim800.available()) Serial.write(sim800.read());
 }
