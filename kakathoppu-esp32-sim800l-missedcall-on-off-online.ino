@@ -1,5 +1,3 @@
-
-
 #include <EEPROM.h>
 
 // ---------------- CONFIG ----------------
@@ -13,10 +11,12 @@
 #define STARTER_DELAY 1500
 
 #define EEPROM_SIZE 512
+#define EEPROM_MOTOR_STATE 500
+
 #define MAX_NUMBERS 10
 #define NUMBER_LENGTH 15
 
-#define SMS_VALID_WINDOW 120000   // 2 minutes (ms)
+#define SMS_VALID_WINDOW 120000
 
 HardwareSerial sim800(2);
 
@@ -36,80 +36,14 @@ unsigned long smsReceiveMillis = 0;
 
 String storedNumbers[MAX_NUMBERS];
 
-// ---------------- SETUP ----------------
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(RELAY_START, OUTPUT);
-  pinMode(RELAY_STOP, OUTPUT);
-  pinMode(SIM800_RST, OUTPUT);
-
-  digitalWrite(RELAY_START, HIGH);
-  digitalWrite(RELAY_STOP, HIGH);
-  digitalWrite(SIM800_RST, HIGH);
-
-  sim800.begin(9600, SERIAL_8N1, SIM800_RX, SIM800_TX);
-
-  EEPROM.begin(EEPROM_SIZE);
-  loadNumbers();
-
-  delay(3000);
-
-  sendAT("AT");
-  sendAT("AT+CNMP=13");
-  sendAT("AT+CMNB=1");
-
-  sendAT("AT+CMGF=1");
-  sendAT("AT+CNMI=1,2,0,0,0");   // live SMS
-  sendAT("AT+CLIP=1");
-
-  sendAT("AT+CMGD=1,4");         // delete old SMS
-
-  Serial.println("System Ready...");
+// ---------------- EEPROM STATE ----------------
+void saveMotorState(bool state) {
+  EEPROM.write(EEPROM_MOTOR_STATE, state ? 1 : 0);
+  EEPROM.commit();
 }
 
-// ---------------- LOOP ----------------
-void loop() {
-  ensureSIMWorking();
-
-  while (sim800.available()) {
-    char c = sim800.read();
-    smsBuffer += c;
-
-    if (c == '\n') {
-      smsBuffer.trim();
-
-      Serial.println("RAW:");
-      Serial.println(smsBuffer);
-
-      // CALL
-      if (smsBuffer.startsWith("RING")) {
-        incomingCall = true;
-      }
-      else if (smsBuffer.startsWith("+CLIP:")) {
-        extractCallNumber(smsBuffer);
-        if (incomingCall) {
-          handleCall();
-          incomingCall = false;
-        }
-      }
-
-      // SMS HEADER
-      else if (smsBuffer.startsWith("+CMT:")) {
-        extractSender(smsBuffer);
-        newSMS = true;
-        smsReceiveMillis = millis();   // ✅ capture arrival time
-      }
-
-      // SMS BODY
-      else if (newSMS) {
-        processSMS(smsBuffer);
-        newSMS = false;
-      }
-
-      smsBuffer = "";
-    }
-  }
+bool loadMotorState() {
+  return EEPROM.read(EEPROM_MOTOR_STATE) == 1;
 }
 
 // ---------------- NORMALIZE ----------------
@@ -121,11 +55,31 @@ String normalizeNumber(String num) {
   if (num.startsWith("91") && !num.startsWith("+91")) {
     num = "+" + num;
   }
-
   return num;
 }
 
-// ---------------- EEPROM ----------------
+// ---------------- EXTRACT ----------------
+void extractSender(String data) {
+  int f = data.indexOf("\"");
+  int s = data.indexOf("\"", f + 1);
+
+  if (f != -1 && s != -1) {
+    senderNumber = normalizeNumber(data.substring(f + 1, s));
+    Serial.println("SMS From: " + senderNumber);
+  }
+}
+
+void extractCallNumber(String data) {
+  int f = data.indexOf("\"");
+  int s = data.indexOf("\"", f + 1);
+
+  if (f != -1 && s != -1) {
+    callNumber = normalizeNumber(data.substring(f + 1, s));
+    Serial.println("Call From: " + callNumber);
+  }
+}
+
+// ---------------- EEPROM NUMBERS ----------------
 void loadNumbers() {
   int addr = 0;
 
@@ -201,37 +155,89 @@ bool deleteNumber(String num) {
   return false;
 }
 
-// ---------------- EXTRACT ----------------
-void extractSender(String data) {
-  int f = data.indexOf("\"");
-  int s = data.indexOf("\"", f + 1);
+// ---------------- SETUP ----------------
+void setup() {
+  Serial.begin(115200);
 
-  if (f != -1 && s != -1) {
-    senderNumber = normalizeNumber(data.substring(f + 1, s));
-    Serial.println("SMS From: " + senderNumber);
+  pinMode(RELAY_START, OUTPUT);
+  pinMode(RELAY_STOP, OUTPUT);
+  pinMode(SIM800_RST, OUTPUT);
+
+  digitalWrite(RELAY_START, HIGH);
+  digitalWrite(RELAY_STOP, HIGH);
+  digitalWrite(SIM800_RST, HIGH);
+
+  sim800.begin(9600, SERIAL_8N1, SIM800_RX, SIM800_TX);
+
+  EEPROM.begin(EEPROM_SIZE);
+  loadNumbers();
+
+  motorState = loadMotorState();
+
+  delay(3000);
+
+  sendAT("AT");
+  sendAT("AT+CNMP=13");
+  sendAT("AT+CMNB=1");
+
+  sendAT("AT+CMGF=1");
+  sendAT("AT+CNMI=1,2,0,0,0");
+  sendAT("AT+CLIP=1");
+  sendAT("AT+CMGD=1,4");
+
+  Serial.println("System Ready...");
+
+  if (motorState) {
+    Serial.println("Restoring Motor ON...");
+    delay(5000);
+    triggerStart();
   }
 }
 
-void extractCallNumber(String data) {
-  int f = data.indexOf("\"");
-  int s = data.indexOf("\"", f + 1);
+// ---------------- LOOP ----------------
+void loop() {
+  ensureSIMWorking();
 
-  if (f != -1 && s != -1) {
-    callNumber = normalizeNumber(data.substring(f + 1, s));
-    Serial.println("Call From: " + callNumber);
+  while (sim800.available()) {
+    char c = sim800.read();
+    smsBuffer += c;
+
+    if (c == '\n') {
+      smsBuffer.trim();
+
+      Serial.println("RAW:");
+      Serial.println(smsBuffer);
+
+      if (smsBuffer.startsWith("RING")) {
+        incomingCall = true;
+      }
+      else if (smsBuffer.startsWith("+CLIP:")) {
+        extractCallNumber(smsBuffer);
+        if (incomingCall) {
+          handleCall();
+          incomingCall = false;
+        }
+      }
+      else if (smsBuffer.startsWith("+CMT:")) {
+        extractSender(smsBuffer);
+        newSMS = true;
+        smsReceiveMillis = millis();
+      }
+      else if (newSMS) {
+        processSMS(smsBuffer);
+        newSMS = false;
+      }
+
+      smsBuffer = "";
+    }
   }
-}
-
-// ---------------- TIME CHECK (FIXED) ----------------
-bool isRecentSMS() {
-  unsigned long diff = millis() - smsReceiveMillis;
-
-  Serial.println("Local diff(ms): " + String(diff));
-
-  return diff <= SMS_VALID_WINDOW;
 }
 
 // ---------------- SMS ----------------
+bool isRecentSMS() {
+  return (millis() - smsReceiveMillis) <= SMS_VALID_WINDOW;
+}
+
 void processSMS(String data) {
 
   data.trim();
@@ -242,6 +248,7 @@ void processSMS(String data) {
     return;
   }
 
+  // ✅ ADMIN COMMANDS ONLY ADDED
   if (senderNumber == adminNumber) {
 
     if (data.startsWith("ADD,")) {
@@ -266,14 +273,23 @@ void processSMS(String data) {
     }
   }
 
+  // ---- ORIGINAL LOGIC ----
   if (!isAllowed(senderNumber)) return;
 
   if (data == "ON") {
-    startMotor();
-    sendSMS(senderNumber, "Motor Started");
+    if (!motorState) {
+      triggerStart();
+      motorState = true;
+      saveMotorState(true);
+      sendSMS(senderNumber, "Motor Started");
+    } else {
+      sendSMS(senderNumber, "Already ON");
+    }
   }
   else if (data == "OFF") {
-    stopMotor();
+    triggerStop();
+    motorState = false;
+    saveMotorState(false);
     sendSMS(senderNumber, "Motor Stopped");
   }
   else {
@@ -289,27 +305,29 @@ void handleCall() {
   if (!isAllowed(callNumber)) return;
 
   if (!motorState) {
-    startMotor();
+    triggerStart();
+    motorState = true;
+    saveMotorState(true);
     sendSMS(callNumber, "Motor Started (Call)");
   } else {
-    stopMotor();
+    triggerStop();
+    motorState = false;
+    saveMotorState(false);
     sendSMS(callNumber, "Motor Stopped (Call)");
   }
 }
 
-// ---------------- MOTOR ----------------
-void startMotor() {
+// ---------------- RELAY ----------------
+void triggerStart() {
   digitalWrite(RELAY_START, LOW);
   delay(STARTER_DELAY);
   digitalWrite(RELAY_START, HIGH);
-  motorState = true;
 }
 
-void stopMotor() {
+void triggerStop() {
   digitalWrite(RELAY_STOP, LOW);
   delay(STARTER_DELAY);
   digitalWrite(RELAY_STOP, HIGH);
-  motorState = false;
 }
 
 // ---------------- SMS SEND ----------------
@@ -322,10 +340,8 @@ void sendSMS(String number, String msg) {
   sim800.println("\"");
 
   delay(500);
-
   sim800.print(msg);
   delay(500);
-
   sim800.write(26);
   delay(3000);
 }
