@@ -1,0 +1,1265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Farm Pipeline SCADA Dashboard</title>
+    <!-- Tailwind CSS for Industrial UI Styling -->
+    <link rel="stylesheet" href="vendor/tailwind.css">  <!-- compiled locally by install-dashboard.sh (Tailwind 3.4.17) -->
+    <!-- MQTT.js via CDN for Browser WebSockets Connectivity -->
+    <script src="vendor/mqtt.min.js"></script>  <!-- served locally from the Pi (works without internet) -->
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #e2e8f0;
+            font-family: monospace;
+        }
+        .pipeline {
+            stroke-dasharray: 8;
+            animation: flow 2s linear infinite;
+            transition: stroke 0.5s ease, stroke-width 0.3s ease;
+        }
+        .pipeline.off {
+            animation: none;
+            stroke-dasharray: none;
+        }
+        @keyframes flow {
+            to {
+                stroke-dashoffset: -16;
+            }
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+    </style>
+</head>
+<body class="p-6">
+    <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- Header Banner -->
+        <header class="glass-panel p-4 rounded-xl flex flex-col md:flex-row justify-between items-center border-b border-cyan-500/30 gap-4 shadow-lg shadow-cyan-500/5">
+            <div>
+                <h1 class="text-2xl font-bold tracking-widest text-cyan-400 flex items-center gap-2">
+                    <span class="inline-block w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></span>
+                    AGRI-GRID SCADA NETWORK v3.0
+                </h1>
+                <p class="text-xs text-slate-400 mt-1">Expanded Pipeline Node Topology & Bidirectional MQTT Engine</p>
+            </div>
+            
+            <!-- MQTT Connection Status Card -->
+            <div class="flex items-center gap-4 text-sm bg-slate-900/60 p-2 rounded-lg border border-slate-700">
+                <div class="flex items-center gap-2">
+                    <div id="mqtt-status-indicator" class="w-3 h-3 rounded-full bg-amber-500"></div>
+                    <span id="mqtt-status-text" class="text-amber-400 font-bold">SIMULATION MODE</span>
+                </div>
+                <button id="arm-btn" class="px-3 py-1 bg-slate-700/40 border border-slate-500 text-slate-300 rounded text-xs font-bold transition" title="Controls are locked until armed; auto-disarm after 5 min">VIEW ONLY - ARM CONTROLS</button>
+                <button id="toggle-settings-btn" class="px-3 py-1 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500 text-cyan-300 rounded text-xs transition">
+                    Configure MQTT
+                </button>
+            </div>
+        </header>
+        <div id="stale-banner" role="alert" class="hidden bg-rose-950/70 border border-rose-500 text-rose-200 text-xs font-bold rounded-lg p-3 text-center tracking-wider">TELEMETRY STALE - no data from controller for more than 5 s. Displayed values may be out of date.</div>
+
+        <!-- MQTT Configuration Collapse Panel -->
+        <div id="settings-panel" class="hidden glass-panel p-4 rounded-xl border border-slate-700 space-y-4">
+            <h3 class="text-sm font-bold text-cyan-400 tracking-wider">MQTT BROKER WEBSOCKET SETTINGS</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div>
+                    <label class="block text-slate-400 mb-1">WebSocket URL</label>
+                    <input id="mqtt-url" type="text" value="ws://raspberrypi.local:9001" placeholder="ws://<PI-IP>:9001" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-cyan-500">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Telemetry Topic (Subscribe)</label>
+                    <input id="mqtt-sub-topic" type="text" value="farm/pipeline/status" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-cyan-500">
+                </div>
+                <div>
+                    <label class="block text-slate-400 mb-1">Control Topic (Publish)</label>
+                    <input id="mqtt-pub-topic" type="text" value="farm/pipeline/control" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-cyan-500">
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div><label class="block text-slate-400 mb-1">Username</label>
+                    <input id="mqtt-user" type="text" autocomplete="off" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-cyan-500"></div>
+                <div><label class="block text-slate-400 mb-1">Password (never stored)</label>
+                    <input id="mqtt-pass" type="password" autocomplete="off" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-slate-200 focus:outline-none focus:border-cyan-500"></div>
+            </div>
+            <p class="text-[10px] text-amber-400">Mosquitto on your Raspberry Pi: WebSocket listener on port 9001. Username and password can stay empty while the broker runs without security on an isolated network. Add authentication and TLS before connecting this network to anything else. This screen's arm/disarm lock is an operator safeguard, not authentication - enforce permissions in the broker ACLs.</p>
+            <div class="flex justify-end gap-2">
+                <button id="connect-mqtt-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs transition">
+                    Connect to Broker
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Display: Grid Diagram vs Telemetry Context Panels -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            
+            <!-- Left Side Grid Synoptic View (Takes 3 columns) -->
+            <div class="lg:col-span-3 glass-panel p-6 rounded-xl relative overflow-hidden flex flex-col items-center">
+                <div class="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-30 pointer-events-none"></div>
+                <div class="w-full flex justify-between items-center mb-4 border-b border-slate-800 pb-2 z-10">
+                    <span class="text-xs font-bold tracking-widest text-slate-400">SYNOPTIC DIAGRAM</span>
+                    <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">Click Pump or Valves to Actuate Control</span>
+                </div>
+
+                <!-- SCADA Pipeline Graphic Grid -->
+                <svg id="scada-canvas" viewBox="0 0 1000 1010" class="w-full h-auto z-10 font-mono select-none">
+                    <!-- Base Definitions for Colors and Glow Filters -->
+                    <defs>
+                        <filter id="glow-cyan" x="-20%" y="-20%" width="140%" height="140%">
+                            <feGaussianBlur stdDeviation="4" result="blur" />
+                            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                        </filter>
+                    </defs>
+
+                    <!-- GRID BACKBONE PIPELINES (CONNECTED LINES) -->
+                    <!-- Pump 1 to Valve V1 -->
+                    <line id="pipe-pump-v1" x1="100" y1="180" x2="220" y2="180" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Valve V1 to Split Node -->
+                    <line id="pipe-v1-split" x1="280" y1="180" x2="360" y2="180" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Split Node Up to V2 -->
+                    <path id="pipe-split-v2" d="M 360 180 L 360 80 L 450 80" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Split Node Down to V3 Branch Line -->
+                    <path id="pipe-split-v3" d="M 360 180 L 360 280 L 450 280" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Split Node Downwards to New Fields Trunk Line -->
+                    <path id="pipe-split-trunk2" d="M 360 280 L 360 480 L 450 480" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+
+                    <!-- Top Branch: V2 to Field A -->
+                    <line id="pipe-v2-fieldA" x1="510" y1="80" x2="680" y2="80" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Mid Branch: V3 to Field B -->
+                    <line id="pipe-v3-fieldB" x1="510" y1="280" x2="680" y2="280" stroke="#475569" stroke-width="6" class="pipeline off" />
+
+                    <!-- Lower Trunk Branch: Trunk Valve V4 to Field C / Field D Splitter Node -->
+                    <line id="pipe-v4-splitCD" x1="510" y1="480" x2="580" y2="480" stroke="#475569" stroke-width="6" class="pipeline off" />
+
+                    <!-- Splitter to Field D Valve -->
+                    <path id="pipe-split-vD" d="M 580 480 L 580 580 L 660 580" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    <!-- Valve VD to Field D -->
+                    <line id="pipe-vD-fieldD" x1="720" y1="580" x2="840" y2="580" stroke="#475569" stroke-width="6" class="pipeline off" />
+
+                    <!-- Splitter to Field C Multi-Distributor Manifold Pipe -->
+                    <line id="pipe-split-manifoldC" x1="580" y1="480" x2="660" y2="480" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    
+                    <!-- Field C Individual Endpoint Branch Feeder Lines -->
+                    <path id="pipe-manifold-vC1" d="M 660 480 L 660 380 L 720 380" fill="none" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <path id="pipe-manifold-vC2" d="M 660 480 L 660 440 L 720 440" fill="none" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <path id="pipe-manifold-vC3" d="M 660 480 L 660 500 L 720 500" fill="none" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <path id="pipe-manifold-vC4" d="M 660 480 L 660 540 L 720 540" fill="none" stroke="#475569" stroke-width="4" class="pipeline off" />
+
+                    <!-- Field C End Point Outputs from Valves -->
+                    <line id="pipe-vC1-out" x1="770" y1="380" x2="840" y2="380" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-vC2-out" x1="770" y1="440" x2="840" y2="440" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-vC3-out" x1="770" y1="500" x2="840" y2="500" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-vC4-out" x1="770" y1="540" x2="840" y2="540" stroke="#475569" stroke-width="4" class="pipeline off" />
+
+                    <!-- ===== D -> E EXTENSION ===== -->
+                    <!-- Field D outlet down to Valve V_DE -->
+                    <path id="pipe-D-vDE" d="M 905 610 L 905 690 L 760 690" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    <!-- Valve V_DE to Field E manifold -->
+                    <path id="pipe-vDE-manifoldE" d="M 700 690 L 490 690 L 490 780" fill="none" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    <!-- Field E horizontal manifold spine -->
+                    <line id="pipe-manifoldE-spine" x1="70" y1="780" x2="910" y2="780" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    <line id="pipe-E-b1" x1="70" y1="780" x2="70" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o1" x1="70" y1="860" x2="70" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b2" x1="190" y1="780" x2="190" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o2" x1="190" y1="860" x2="190" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b3" x1="310" y1="780" x2="310" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o3" x1="310" y1="860" x2="310" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b4" x1="430" y1="780" x2="430" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o4" x1="430" y1="860" x2="430" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b5" x1="550" y1="780" x2="550" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o5" x1="550" y1="860" x2="550" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b6" x1="670" y1="780" x2="670" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o6" x1="670" y1="860" x2="670" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b7" x1="790" y1="780" x2="790" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o7" x1="790" y1="860" x2="790" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-b8" x1="910" y1="780" x2="910" y2="830" stroke="#475569" stroke-width="4" class="pipeline off" />
+                    <line id="pipe-E-o8" x1="910" y1="860" x2="910" y2="900" stroke="#475569" stroke-width="4" class="pipeline off" />
+
+
+                    <!-- ===== EMERGENCY RELIEF BRANCH (near Pump 1) ===== -->
+                    <line id="pipe-pump-em" x1="175" y1="180" x2="175" y2="280" stroke="#475569" stroke-width="5" class="pipeline off" />
+                    <line id="pipe-em-out" x1="175" y1="330" x2="175" y2="380" stroke="#475569" stroke-width="5" class="pipeline off" />
+
+                    <!-- GRAPHICAL INTERACTIVE SCADA NODES (PUMP / VALVES / TERMINALS) -->
+                    
+                    <!-- PUMP 1 NODE -->
+                    <g id="node-pump1" class="cursor-pointer group" onclick="openControlModal('pump1', 'Main Water Pump')">
+                        <circle cx="100" cy="180" r="30" fill="#1e293b" stroke="#38bdf8" stroke-width="3" filter="url(#glow-cyan)" />
+                        <path d="M 88 180 L 105 168 L 105 192 Z" fill="#38bdf8" id="icon-pump1" />
+                        <text x="100" y="230" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">PUMP 1</text>
+                        <text x="100" y="245" text-anchor="middle" id="lbl-pump1-state" fill="#ef4444" class="text-[10px] font-bold">OFF</text>
+                    </g>
+
+                    <!-- PRIMARY CONTROL VALVE V1 -->
+                    <g id="node-valve1" class="cursor-pointer group" onclick="openControlModal('valve1', 'Primary Valve V1')">
+                        <rect x="220" y="155" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="230,165 270,195 270,165 230,195" fill="#64748b" id="icon-valve1" />
+                        <text x="250" y="145" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V1</text>
+                        <text x="250" y="220" text-anchor="middle" id="lbl-valve1-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+                    <!-- FIELD A ISOLATION VALVE V2 -->
+                    <g id="node-valve2" class="cursor-pointer group" onclick="openControlModal('valve2', 'Field A Valve V2')">
+                        <rect x="450" y="55" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="460,65 500,95 500,65 460,95" fill="#64748b" id="icon-valve2" />
+                        <text x="480" y="45" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V2</text>
+                        <text x="480" y="120" text-anchor="middle" id="lbl-valve2-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+                    <!-- FIELD B ISOLATION VALVE V3 -->
+                    <g id="node-valve3" class="cursor-pointer group" onclick="openControlModal('valve3', 'Field B Valve V3')">
+                        <rect x="450" y="255" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="460,265 500,295 500,265 460,295" fill="#64748b" id="icon-valve3" />
+                        <text x="480" y="245" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V3</text>
+                        <text x="480" y="320" text-anchor="middle" id="lbl-valve3-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+                    <!-- FIELD C & D TRUNK ISOLATION VALVE V4 -->
+                    <g id="node-valve4" class="cursor-pointer group" onclick="openControlModal('valve4', 'Trunk Valve V4')">
+                        <rect x="450" y="455" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="460,465 500,495 500,465 460,495" fill="#64748b" id="icon-valve4" />
+                        <text x="480" y="445" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V4</text>
+                        <text x="480" y="520" text-anchor="middle" id="lbl-valve4-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+                    <!-- FIELD D TERMINAL VALVE VD -->
+                    <g id="node-valveD" class="cursor-pointer group" onclick="openControlModal('valveD', 'Field D Master Valve')">
+                        <rect x="660" y="555" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="670,565 710,595 710,565 670,595" fill="#64748b" id="icon-valveD" />
+                        <text x="690" y="545" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V_D</text>
+                        <text x="690" y="620" text-anchor="middle" id="lbl-valveD-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+
+                    <!-- FIELD C FOUR END POINT VALVE CLUSTER -->
+                    <!-- Valve C1 -->
+                    <g id="node-valveC1" class="cursor-pointer" onclick="openControlModal('valveC1', 'Endpoint C1 Valve')">
+                        <rect x="720" y="365" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="725,370 765,390 765,370 725,390" fill="#64748b" id="icon-valveC1" />
+                        <text x="745" y="360" text-anchor="middle" fill="#94a3b8" class="text-[9px] font-bold">V-C1</text>
+                    </g>
+                    <!-- Valve C2 -->
+                    <g id="node-valveC2" class="cursor-pointer" onclick="openControlModal('valveC2', 'Endpoint C2 Valve')">
+                        <rect x="720" y="425" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="725,430 765,450 765,430 725,450" fill="#64748b" id="icon-valveC2" />
+                        <text x="745" y="420" text-anchor="middle" fill="#94a3b8" class="text-[9px] font-bold">V-C2</text>
+                    </g>
+                    <!-- Valve C3 -->
+                    <g id="node-valveC3" class="cursor-pointer" onclick="openControlModal('valveC3', 'Endpoint C3 Valve')">
+                        <rect x="720" y="485" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="725,490 765,510 765,490 725,510" fill="#64748b" id="icon-valveC3" />
+                        <text x="745" y="480" text-anchor="middle" fill="#94a3b8" class="text-[9px] font-bold">V-C3</text>
+                    </g>
+                    <!-- Valve C4 -->
+                    <g id="node-valveC4" class="cursor-pointer" onclick="openControlModal('valveC4', 'Endpoint C4 Valve')">
+                        <rect x="720" y="525" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="725,530 765,550 765,530 725,550" fill="#64748b" id="icon-valveC4" />
+                        <text x="745" y="520" text-anchor="middle" fill="#94a3b8" class="text-[9px] font-bold">V-C4</text>
+                    </g>
+
+
+                    <!-- CONSUMPTION ENDPOINTS (FIELDS TERMINALS) -->
+                    <!-- FIELD A -->
+                    <g transform="translate(680, 50)">
+                        <rect width="120" height="60" rx="8" fill="#14532d" stroke="#22c55e" stroke-width="2" />
+                        <text x="60" y="28" text-anchor="middle" fill="#22c55e" class="text-xs font-bold">FIELD A</text>
+                        <text x="60" y="48" text-anchor="middle" id="txt-flow-fieldA" fill="#a7f3d0" class="text-[11px]">0.0 L/m</text>
+                    </g>
+
+                    <!-- FIELD B -->
+                    <g transform="translate(680, 250)">
+                        <rect width="120" height="60" rx="8" fill="#14532d" stroke="#22c55e" stroke-width="2" />
+                        <text x="60" y="28" text-anchor="middle" fill="#22c55e" class="text-xs font-bold">FIELD B</text>
+                        <text x="60" y="48" text-anchor="middle" id="txt-flow-fieldB" fill="#a7f3d0" class="text-[11px]">0.0 L/m</text>
+                    </g>
+
+                    <!-- FIELD D -->
+                    <g transform="translate(840, 550)">
+                        <rect width="130" height="60" rx="8" fill="#14532d" stroke="#22c55e" stroke-width="2" />
+                        <text x="65" y="28" text-anchor="middle" fill="#22c55e" class="text-xs font-bold">FIELD D</text>
+                        <text x="65" y="48" text-anchor="middle" id="txt-flow-fieldD" fill="#a7f3d0" class="text-[11px]">0.0 L/m</text>
+                    </g>
+
+                    <!-- FIELD C MULTI-ENDPOINT STRUCTURE PANEL -->
+                    <g transform="translate(840, 360)">
+                        <rect width="130" height="200" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="65" y="20" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold tracking-wide">FIELD C SYSTEM</text>
+                        
+                        <!-- Mini lines inside field C to indicate individual endpoints -->
+                        <text x="15" y="55" fill="#94a3b8" class="text-[10px]">EP 1:</text>
+                        <text x="115" y="55" id="txt-flow-c1" text-anchor="end" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                        
+                        <text x="15" y="90" fill="#94a3b8" class="text-[10px]">EP 2:</text>
+                        <text x="115" y="90" id="txt-flow-c2" text-anchor="end" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+
+                        <text x="15" y="125" fill="#94a3b8" class="text-[10px]">EP 3:</text>
+                        <text x="115" y="125" id="txt-flow-c3" text-anchor="end" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+
+                        <text x="15" y="160" fill="#94a3b8" class="text-[10px]">EP 4:</text>
+                        <text x="115" y="160" id="txt-flow-c4" text-anchor="end" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+
+                        <line x1="10" y1="175" x2="120" y2="175" stroke="#1e293b" stroke-width="1" />
+                        <text x="65" y="192" text-anchor="middle" id="txt-flow-fieldC-total" fill="#38bdf8" class="text-[10px] font-bold">TOTAL: 0 L/m</text>
+                    </g>
+
+                    <!-- VALVE V_DE (D -> E link) -->
+                    <g id="node-valveDE" class="cursor-pointer group" onclick="openControlModal('valveDE', 'D to E Link Valve')">
+                        <rect x="700" y="665" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" />
+                        <polygon points="710,675 750,705 750,675 710,705" fill="#64748b" id="icon-valveDE" />
+                        <text x="730" y="655" text-anchor="middle" fill="#e2e8f0" class="text-xs font-bold">VALVE V_DE</text>
+                        <text x="730" y="730" text-anchor="middle" id="lbl-valveDE-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+
+                    <!-- FIELD E: 8 ENDPOINT VALVES + TERMINALS -->
+                    <text x="70" y="762" fill="#38bdf8" class="text-xs font-bold tracking-wide">FIELD E MANIFOLD</text>
+
+                    <g id="node-valveE1" class="cursor-pointer" onclick="openControlModal('valveE1', 'Endpoint E1 Valve')">
+                        <rect x="45" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="50,835 90,855 90,835 50,855" fill="#64748b" id="icon-valveE1" />
+                        <text x="100" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E1</text>
+                    </g>
+                    <g transform="translate(25, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E1</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e1" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE2" class="cursor-pointer" onclick="openControlModal('valveE2', 'Endpoint E2 Valve')">
+                        <rect x="165" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="170,835 210,855 210,835 170,855" fill="#64748b" id="icon-valveE2" />
+                        <text x="220" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E2</text>
+                    </g>
+                    <g transform="translate(145, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E2</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e2" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE3" class="cursor-pointer" onclick="openControlModal('valveE3', 'Endpoint E3 Valve')">
+                        <rect x="285" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="290,835 330,855 330,835 290,855" fill="#64748b" id="icon-valveE3" />
+                        <text x="340" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E3</text>
+                    </g>
+                    <g transform="translate(265, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E3</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e3" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE4" class="cursor-pointer" onclick="openControlModal('valveE4', 'Endpoint E4 Valve')">
+                        <rect x="405" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="410,835 450,855 450,835 410,855" fill="#64748b" id="icon-valveE4" />
+                        <text x="460" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E4</text>
+                    </g>
+                    <g transform="translate(385, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E4</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e4" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE5" class="cursor-pointer" onclick="openControlModal('valveE5', 'Endpoint E5 Valve')">
+                        <rect x="525" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="530,835 570,855 570,835 530,855" fill="#64748b" id="icon-valveE5" />
+                        <text x="580" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E5</text>
+                    </g>
+                    <g transform="translate(505, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E5</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e5" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE6" class="cursor-pointer" onclick="openControlModal('valveE6', 'Endpoint E6 Valve')">
+                        <rect x="645" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="650,835 690,855 690,835 650,855" fill="#64748b" id="icon-valveE6" />
+                        <text x="700" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E6</text>
+                    </g>
+                    <g transform="translate(625, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E6</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e6" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE7" class="cursor-pointer" onclick="openControlModal('valveE7', 'Endpoint E7 Valve')">
+                        <rect x="765" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="770,835 810,855 810,835 770,855" fill="#64748b" id="icon-valveE7" />
+                        <text x="820" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E7</text>
+                    </g>
+                    <g transform="translate(745, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E7</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e7" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <g id="node-valveE8" class="cursor-pointer" onclick="openControlModal('valveE8', 'Endpoint E8 Valve')">
+                        <rect x="885" y="830" width="50" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5" />
+                        <polygon points="890,835 930,855 930,835 890,855" fill="#64748b" id="icon-valveE8" />
+                        <text x="940" y="849" fill="#94a3b8" class="text-[9px] font-bold">V-E8</text>
+                    </g>
+                    <g transform="translate(865, 900)">
+                        <rect width="90" height="55" rx="8" fill="#0f2942" stroke="#38bdf8" stroke-width="2" />
+                        <text x="45" y="22" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">E8</text>
+                        <text x="45" y="42" text-anchor="middle" id="txt-flow-e8" fill="#e2e8f0" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <text x="490" y="990" text-anchor="middle" id="txt-flow-fieldE-total" fill="#38bdf8" class="text-xs font-bold">FIELD E TOTAL: 0.0 L/m</text>
+
+                    <!-- EMERGENCY RELIEF VALVE (auto-opens on dead-head) -->
+                    <g id="node-valveEM" class="cursor-pointer group" onclick="openControlModal('valveEM', 'Emergency Relief Valve')">
+                        <rect x="145" y="280" width="60" height="50" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="2" stroke-dasharray="5 3" />
+                        <polygon points="155,290 195,320 195,290 155,320" fill="#64748b" id="icon-valveEM" />
+                        <text x="138" y="300" text-anchor="end" fill="#f59e0b" class="text-[10px] font-bold">EMERGENCY</text>
+                        <text x="138" y="313" text-anchor="end" fill="#f59e0b" class="text-[10px] font-bold">VALVE EM</text>
+                        <text x="138" y="327" text-anchor="end" id="lbl-valveEM-state" fill="#ef4444" class="text-[10px] font-bold">CLOSED</text>
+                    </g>
+                    <!-- Relief return -->
+                    <g transform="translate(115, 380)">
+                        <rect width="120" height="55" rx="8" fill="#422006" stroke="#f59e0b" stroke-width="2" />
+                        <text x="60" y="22" text-anchor="middle" fill="#f59e0b" class="text-xs font-bold">RELIEF RETURN</text>
+                        <text x="60" y="42" text-anchor="middle" id="txt-flow-bypass" fill="#fde68a" class="text-[10px]">0.0 L/m</text>
+                    </g>
+
+                    <!-- ===== WELL WATER LEVEL (4 stages) ===== -->
+                    <line id="pipe-well-pump" x1="100" y1="120" x2="100" y2="150" stroke="#475569" stroke-width="6" class="pipeline off" />
+                    <g id="node-well">
+                        <rect x="40" y="20" width="120" height="100" rx="6" fill="#0b1220" stroke="#38bdf8" stroke-width="2" />
+                        <rect id="well-seg-4" x="44" y="22" width="112" height="21" rx="2" fill="#1e293b" />
+                        <rect id="well-seg-3" x="44" y="47" width="112" height="21" rx="2" fill="#1e293b" />
+                        <rect id="well-seg-2" x="44" y="72" width="112" height="21" rx="2" fill="#1e293b" />
+                        <rect id="well-seg-1" x="44" y="97" width="112" height="21" rx="2" fill="#1e293b" />
+                    </g>
+                    <text x="100" y="12" text-anchor="middle" fill="#38bdf8" class="text-xs font-bold">WELL</text>
+                    <text id="well-lbl-4" x="168" y="36" fill="#64748b" class="text-[10px] font-bold">L4 FULL</text>
+                    <text id="well-lbl-3" x="168" y="61" fill="#64748b" class="text-[10px] font-bold">L3 NORMAL</text>
+                    <text id="well-lbl-2" x="168" y="86" fill="#64748b" class="text-[10px] font-bold">L2 LOW</text>
+                    <text id="well-lbl-1" x="168" y="111" fill="#64748b" class="text-[10px] font-bold">L1 CRITICAL</text>
+                </svg>
+            </div>
+
+            <!-- Right Side Live Operational Matrix Context Panels -->
+            <div class="space-y-6">
+                
+                <!-- System Pressure Alert Monitor Summary -->
+                <div class="glass-panel p-4 rounded-xl space-y-3">
+                    <h2 class="text-sm font-bold tracking-wider text-cyan-400">TELEMETRY SENSORS</h2>
+                    <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-800 space-y-1">
+                        <div class="text-[10px] text-slate-400">MAIN MANIFOLD PRESSURE</div>
+                        <div class="text-2xl font-bold font-mono text-emerald-400" id="stat-pressure">0.0 PSI</div>
+                    </div>
+                    <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-800 space-y-1">
+                        <div class="text-[10px] text-slate-400">NET DISCHARGE VOLUME</div>
+                        <div class="text-2xl font-bold font-mono text-cyan-400" id="stat-total-flow">0.0 L/min</div>
+                    </div>
+                </div>
+
+                <!-- Well Water Level -->
+                <div class="glass-panel p-4 rounded-xl space-y-3">
+                    <h2 class="text-sm font-bold tracking-wider text-cyan-400">WELL WATER LEVEL</h2>
+                    <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-800 space-y-1">
+                        <div class="text-[10px] text-slate-400">SENSOR LEVEL (1-4)</div>
+                        <div class="text-2xl font-bold font-mono text-cyan-400" id="stat-well-level">LEVEL 3 - NORMAL</div>
+                    </div>
+                    <div class="text-[10px] text-slate-400">Simulate sensor (or send <span class="text-slate-300">wellLevel</span> 1-4 via MQTT):</div>
+                    <div class="grid grid-cols-4 gap-1">
+                        <button onclick="setWellLevel(1)" class="py-1 text-[10px] font-bold rounded border border-rose-500/50 text-rose-300 hover:bg-rose-900/40">L1</button>
+                        <button onclick="setWellLevel(2)" class="py-1 text-[10px] font-bold rounded border border-amber-500/50 text-amber-300 hover:bg-amber-900/40">L2</button>
+                        <button onclick="setWellLevel(3)" class="py-1 text-[10px] font-bold rounded border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900/40">L3</button>
+                        <button onclick="setWellLevel(4)" class="py-1 text-[10px] font-bold rounded border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900/40">L4</button>
+                    </div>
+                </div>
+
+                <!-- Color Code Legend Alert Rules -->
+                <div class="glass-panel p-4 rounded-xl space-y-2">
+                    <h2 class="text-sm font-bold tracking-wider text-cyan-400">SCADA PIPE LEGEND</h2>
+                    <div class="space-y-2 text-xs pt-1">
+                        <div class="flex items-center gap-3">
+                            <div class="w-4 h-1 bg-emerald-500 rounded"></div>
+                            <div><span class="font-bold text-emerald-400">Green:</span> Nominal Pipe Flow</div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-4 h-1 bg-amber-500 rounded"></div>
+                            <div><span class="font-bold text-amber-500">Yellow:</span> Low Pressure / Check Leak</div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-4 h-1 bg-rose-600 rounded"></div>
+                            <div><span class="font-bold text-rose-500">Red:</span> Pipe Burst / High Alert</div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-4 h-1 bg-slate-600 rounded"></div>
+                            <div><span class="font-bold text-slate-400">Grey:</span> Isolated / Dead Segment</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trends -->
+                <div class="glass-panel p-4 rounded-xl space-y-2">
+                    <h2 class="text-sm font-bold tracking-wider text-cyan-400">TRENDS (last 5 min)</h2>
+                    <div class="text-[10px] text-slate-400">Pressure (PSI)</div>
+                    <svg id="spark-p" viewBox="0 0 200 40" class="w-full h-8 bg-slate-900/60 rounded" role="img" aria-label="Pressure trend"></svg>
+                    <div class="text-[10px] text-slate-400">Net flow (L/min)</div>
+                    <svg id="spark-f" viewBox="0 0 200 40" class="w-full h-8 bg-slate-900/60 rounded" role="img" aria-label="Flow trend"></svg>
+                    <div class="text-[10px] text-slate-400">Well level (%)</div>
+                    <svg id="spark-w" viewBox="0 0 200 40" class="w-full h-8 bg-slate-900/60 rounded" role="img" aria-label="Well level trend"></svg>
+                </div>
+
+                <!-- Alarm / Audit log -->
+                <div class="glass-panel p-4 rounded-xl space-y-2">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-sm font-bold tracking-wider text-cyan-400">ALARM &amp; AUDIT LOG</h2>
+                        <div class="flex gap-1">
+                            <button id="ack-btn" class="px-2 py-0.5 text-[10px] border border-amber-500/60 text-amber-300 rounded hover:bg-amber-900/40">ACK ALL</button>
+                            <button id="csv-btn" class="px-2 py-0.5 text-[10px] border border-slate-600 text-slate-300 rounded hover:bg-slate-700/50">CSV</button>
+                        </div>
+                    </div>
+                    <div id="event-log" aria-live="polite" class="space-y-1 max-h-[220px] overflow-y-auto text-[10px]"></div>
+                </div>
+
+                <!-- Simulation Component Status Manual Overrides -->
+                <div class="glass-panel p-4 rounded-xl space-y-3">
+                    <h2 class="text-sm font-bold tracking-wider text-cyan-400">TOPOLOGY INTEGRITY ALERTS</h2>
+                    <div class="space-y-2 max-h-[180px] overflow-y-auto text-[11px]" id="integrity-status-list">
+                        <!-- Populated by JavaScript based on state conditions -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTROL VALVE MODAL OVERLAY -->
+    <div id="control-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="glass-panel w-full max-w-md p-6 rounded-xl border border-slate-700 space-y-4 shadow-2xl">
+            <div class="flex justify-between items-start border-b border-slate-800 pb-2">
+                <div>
+                    <h2 id="modal-node-title" class="text-lg font-bold text-cyan-400">CONTROL ACTUATOR</h2>
+                    <p id="modal-node-id" class="text-[10px] text-slate-500"></p>
+                </div>
+                <button onclick="closeControlModal()" class="text-slate-400 hover:text-white font-bold text-sm">&times;</button>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-800 flex justify-between items-center">
+                    <span class="text-xs text-slate-400">Current Actuation Status:</span>
+                    <span id="modal-current-state" class="text-xs font-bold px-2 py-0.5 rounded"></span>
+                </div>
+
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-800 space-y-2">
+                    <label class="block text-xs text-slate-400">Simulate Pipe Line Diagnostic Status</label>
+                    <select id="modal-status-select" class="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-slate-200">
+                        <option value="ok">Nominal Status (Green Line)</option>
+                        <option value="warning">Warning Status (Yellow Line)</option>
+                        <option value="critical">Critical Alarm Status (Red Line)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                <button onclick="closeControlModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs transition">
+                    Cancel
+                </button>
+                <button id="modal-action-btn" class="px-4 py-2 text-white font-bold rounded text-xs transition">
+                    TOGGLE ACTUATION
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCRIPTS AND SYSTEM LOGIC INTERACTION -->
+    <script>
+        // System Hardware Simulation Engine State Map
+        const state = {
+            pump1: { active: false, pipeStatus: 'ok' },
+            valve1: { open: false, pipeStatus: 'ok' },
+            valve2: { open: false, pipeStatus: 'ok' },
+            valve3: { open: false, pipeStatus: 'ok' },
+            valve4: { open: false, pipeStatus: 'ok' },
+            valveC1: { open: false, pipeStatus: 'ok' },
+            valveC2: { open: false, pipeStatus: 'ok' },
+            valveC3: { open: false, pipeStatus: 'ok' },
+            valveC4: { open: false, pipeStatus: 'ok' },
+            valveD: { open: false, pipeStatus: 'ok' },
+            valveEM: { open: false, manual: false, auto: false, pipeStatus: 'ok' },
+            valveDE: { open: false, pipeStatus: 'ok' },
+            valveE1: { open: false, pipeStatus: 'ok' },
+            valveE2: { open: false, pipeStatus: 'ok' },
+            valveE3: { open: false, pipeStatus: 'ok' },
+            valveE4: { open: false, pipeStatus: 'ok' },
+            valveE5: { open: false, pipeStatus: 'ok' },
+            valveE6: { open: false, pipeStatus: 'ok' },
+            valveE7: { open: false, pipeStatus: 'ok' },
+            valveE8: { open: false, pipeStatus: 'ok' }
+        };
+
+        // Well water level sensor (1 = critical/dry-run, 2 = low, 3 = normal, 4 = full)
+        const wellState = { level: 3 };
+        const WELL_NAMES = { 1: 'CRITICAL', 2: 'LOW', 3: 'NORMAL', 4: 'FULL' };
+
+        function setWellLevel(n) {
+            wellState.level = n;
+            recomputeSCADANetworkTopology();
+        }
+
+
+        // ===== PRODUCTION LAYER: link state, arming, audit, alarms, trends =====
+        let lastTelemetryAt = 0, lastTel = null, stale = false, armedUntil = 0, activeAlarms = {};
+        const pending = {};
+        const eventLog = [];
+        const trend = { p: [], f: [], w: [] };
+
+        function isLive() { return !!(mqttClient && mqttClient.connected); }
+        function isArmed() { return armedUntil > Date.now(); }
+
+        function setLinkState(text, color) {
+            const ind = document.getElementById('mqtt-status-indicator');
+            const txt = document.getElementById('mqtt-status-text');
+            const cls = { green: ['bg-emerald-500', 'text-emerald-400'], amber: ['bg-amber-500', 'text-amber-400'], cyan: ['bg-cyan-400 animate-ping', 'text-cyan-400'] }[color];
+            ind.className = 'w-3 h-3 rounded-full ' + cls[0];
+            txt.className = cls[1] + ' font-bold';
+            txt.innerText = text;
+        }
+
+        function logEvent(sev, msg) {
+            eventLog.push({ ts: new Date(), sev: sev, msg: String(msg), acked: sev === 'info' });
+            if (eventLog.length > 500) eventLog.shift();
+            renderLog();
+        }
+
+        function renderLog() {
+            const box = document.getElementById('event-log');
+            if (!box) return;
+            box.textContent = '';
+            eventLog.slice(-40).reverse().forEach(e => {
+                const row = document.createElement('div');
+                const col = e.sev === 'crit' ? 'border-l-rose-500 text-rose-300' : e.sev === 'warn' ? 'border-l-amber-500 text-amber-300' : 'border-l-slate-600 text-slate-400';
+                row.className = 'pl-2 border-l-2 ' + col + (e.acked ? '' : ' font-bold animate-pulse');
+                row.textContent = e.ts.toLocaleTimeString() + '  ' + e.msg;   // textContent: telemetry-safe
+                box.appendChild(row);
+            });
+        }
+
+        document.getElementById('ack-btn').addEventListener('click', () => {
+            eventLog.forEach(e => e.acked = true);
+            logEvent('info', 'OPERATOR: alarms acknowledged');
+        });
+
+        document.getElementById('csv-btn').addEventListener('click', () => {
+            const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+            const rows = ['timestamp,severity,message'].concat(eventLog.map(e => [e.ts.toISOString(), e.sev, q(e.msg)].join(',')));
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+            a.download = 'scada-log-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.csv';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        });
+
+        document.getElementById('arm-btn').addEventListener('click', () => {
+            if (isArmed()) { armedUntil = 0; logEvent('info', 'OPERATOR: controls disarmed'); }
+            else { armedUntil = Date.now() + 300000; logEvent('info', 'OPERATOR: controls armed (5 min)'); }
+            updateArmButton();
+        });
+
+        function updateArmButton() {
+            const b = document.getElementById('arm-btn');
+            if (isArmed()) {
+                const r = Math.ceil((armedUntil - Date.now()) / 1000);
+                b.innerText = 'ARMED ' + Math.floor(r / 60) + ':' + String(r % 60).padStart(2, '0') + ' - DISARM';
+                b.className = 'px-3 py-1 bg-rose-600/40 border border-rose-400 text-rose-200 rounded text-xs font-bold transition';
+            } else {
+                if (b.innerText.startsWith('ARMED')) logEvent('info', 'Controls auto-disarmed');
+                b.innerText = 'VIEW ONLY - ARM CONTROLS';
+                b.className = 'px-3 py-1 bg-slate-700/40 border border-slate-500 text-slate-300 rounded text-xs font-bold transition';
+            }
+        }
+
+        function registerPending(id, want, isPumpDev) {
+            if (pending[id]) clearTimeout(pending[id].timer);
+            const el = document.getElementById('node-' + id);
+            if (el) el.classList.add('animate-pulse');
+            pending[id] = { want: want, isPump: isPumpDev, timer: setTimeout(() => {
+                delete pending[id];
+                if (el) el.classList.remove('animate-pulse');
+                logEvent('crit', 'COMMAND NOT CONFIRMED by controller within 6 s: ' + id);
+            }, 6000) };
+        }
+
+        function resolvePending(d) {
+            Object.keys(pending).forEach(id => {
+                const v = d[id];
+                if (v === undefined) return;
+                const nowState = pending[id].isPump ? v === 'ON' : v === 'OPEN';
+                if (nowState === pending[id].want) {
+                    clearTimeout(pending[id].timer);
+                    const el = document.getElementById('node-' + id);
+                    if (el) el.classList.remove('animate-pulse');
+                    delete pending[id];
+                    logEvent('info', 'Controller confirmed: ' + id);
+                }
+            });
+        }
+
+        function syncAlarms() {
+            const act = {};
+            for (const [k, v] of Object.entries(state)) {
+                if (v.pipeStatus && v.pipeStatus !== 'ok') act['pipe:' + k] = { sev: v.pipeStatus === 'critical' ? 'crit' : 'warn', msg: k + ' pipe ' + v.pipeStatus };
+            }
+            if (wellState.level <= 2) act.well = { sev: wellState.level <= 1 ? 'crit' : 'warn', msg: 'Well level L' + wellState.level + ' ' + WELL_NAMES[wellState.level] };
+            if (state.valveEM.open) act.em = { sev: 'warn', msg: 'Emergency valve open (' + (state.valveEM.auto ? 'auto, dead-head' : 'manual') + ')' };
+            if (stale) act.stale = { sev: 'crit', msg: 'Telemetry stale (>5 s)' };
+            Object.keys(act).forEach(id => { if (!activeAlarms[id]) logEvent(act[id].sev, 'ALARM RAISED: ' + act[id].msg); });
+            Object.keys(activeAlarms).forEach(id => { if (!act[id]) logEvent('info', 'ALARM CLEARED: ' + activeAlarms[id].msg); });
+            activeAlarms = act;
+        }
+
+        function spark(id, arr, lo, hi, color) {
+            const el = document.getElementById(id);
+            if (!el || arr.length < 2) return;
+            const pts = arr.map((v, i) => (i / (arr.length - 1) * 200).toFixed(1) + ',' + (38 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 36).toFixed(1)).join(' ');
+            el.innerHTML = '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '"/>';
+        }
+
+        function saveConfig() {
+            try {
+                localStorage.setItem('scadaCfg', JSON.stringify({
+                    url: document.getElementById('mqtt-url').value,
+                    sub: document.getElementById('mqtt-sub-topic').value,
+                    pub: document.getElementById('mqtt-pub-topic').value,
+                    user: document.getElementById('mqtt-user').value
+                }));
+            } catch (e) { /* storage unavailable */ }
+        }
+        (function loadConfig() {
+            try {
+                const c = JSON.parse(localStorage.getItem('scadaCfg') || 'null');
+                if (!c) return;
+                document.getElementById('mqtt-url').value = c.url || '';
+                document.getElementById('mqtt-sub-topic').value = c.sub || '';
+                document.getElementById('mqtt-pub-topic').value = c.pub || '';
+                document.getElementById('mqtt-user').value = c.user || '';
+            } catch (e) { /* ignore */ }
+        })();
+
+        // 1 s supervisor: arm countdown + stale-data watchdog
+        setInterval(() => {
+            updateArmButton();
+            const wasStale = stale;
+            stale = isLive() && lastTelemetryAt > 0 && (Date.now() - lastTelemetryAt) > 5000;
+            document.getElementById('stale-banner').classList.toggle('hidden', !stale);
+            document.getElementById('scada-canvas').style.opacity = stale ? '0.45' : '1';
+            if (stale !== wasStale) recomputeSCADANetworkTopology();
+        }, 1000);
+
+        // 2 s trend sampler
+        setInterval(() => {
+            const pr = parseFloat(document.getElementById('stat-pressure').innerText) || 0;
+            const fl = parseFloat(document.getElementById('stat-total-flow').innerText) || 0;
+            const wv = (lastTel && typeof lastTel.wellVolumePct === 'number') ? lastTel.wellVolumePct : ({ 1: 8, 2: 27, 3: 57, 4: 90 })[wellState.level];
+            trend.p.push(pr); trend.f.push(fl); trend.w.push(wv);
+            Object.keys(trend).forEach(k => { if (trend[k].length > 150) trend[k].shift(); });
+            spark('spark-p', trend.p, 0, 80, '#10b981');
+            spark('spark-f', trend.f, 0, 250, '#38bdf8');
+            spark('spark-w', trend.w, 0, 100, '#f59e0b');
+        }, 2000);
+
+        window.addEventListener('beforeunload', () => { if (mqttClient) mqttClient.end(true); });
+
+        let mqttClient = null;
+        let activeTargetNode = null;
+
+        // Toggle configuration panel view
+        document.getElementById('toggle-settings-btn').addEventListener('click', () => {
+            const panel = document.getElementById('settings-panel');
+            panel.classList.toggle('hidden');
+        });
+
+        // Initialize MQTT WebSockets Connectivity Hook
+        document.getElementById('connect-mqtt-btn').addEventListener('click', () => {
+            const brokerUrl = document.getElementById('mqtt-url').value;
+            const subTopic = document.getElementById('mqtt-sub-topic').value;
+            const statusInd = document.getElementById('mqtt-status-indicator');
+            const statusTxt = document.getElementById('mqtt-status-text');
+
+            statusInd.className = "w-3 h-3 rounded-full bg-cyan-400 animate-ping";
+            statusTxt.innerText = "CONNECTING...";
+            statusTxt.className = "text-cyan-400 font-bold";
+
+            try {
+                if(mqttClient) mqttClient.end();
+
+                mqttClient = mqtt.connect(brokerUrl, {
+                    username: document.getElementById('mqtt-user').value || undefined,
+                    password: document.getElementById('mqtt-pass').value || undefined,
+                    clientId: 'scada-ui-' + Math.random().toString(16).slice(2, 10),
+                    reconnectPeriod: 3000, connectTimeout: 8000, keepalive: 30, clean: true, resubscribe: true
+                });
+
+                mqttClient.on('connect', () => {
+                    statusInd.className = "w-3 h-3 rounded-full bg-emerald-500 animate-none";
+                    statusTxt.innerText = "MQTT LIVE CONNECTED";
+                    statusTxt.className = "text-emerald-400 font-bold";
+                    mqttClient.subscribe(subTopic, { qos: 1 });
+                    logEvent('info', 'MQTT connected, subscribed to ' + subTopic);
+                    saveConfig();
+                    console.log("MQTT Client connected to broker and subscribed to: " + subTopic);
+                });
+
+                mqttClient.on('message', (topic, message) => {
+                    try {
+                        const payload = JSON.parse(message.toString());
+                        handleInboundTelemetry(payload);
+                    } catch(e) {
+                        console.error("Failed parsing MQTT telemetry JSON: ", e);
+                    }
+                });
+
+                mqttClient.on('reconnect', () => setLinkState('RECONNECTING...', 'amber'));
+                mqttClient.on('error', (err) => {
+                    console.error("MQTT Error: ", err);
+                    resetToSimulationMode();
+                });
+
+                mqttClient.on('close', () => {
+                    console.log("MQTT connection closed.");
+                    setLinkState('LINK LOST - RETRYING', 'amber');
+                    logEvent('warn', 'MQTT link lost');
+                });
+
+            } catch (err) {
+                console.error(err);
+                resetToSimulationMode();
+            }
+        });
+
+        function resetToSimulationMode() {
+            const statusInd = document.getElementById('mqtt-status-indicator');
+            const statusTxt = document.getElementById('mqtt-status-text');
+            statusInd.className = "w-3 h-3 rounded-full bg-amber-500";
+            statusTxt.innerText = "SIMULATION MODE";
+            statusTxt.className = "text-amber-400 font-bold";
+        }
+
+        // Process Incoming JSON data from Node microcontrollers
+        function handleInboundTelemetry(data) {
+            lastTelemetryAt = Date.now(); lastTel = data; resolvePending(data);
+            // Update internal state representation if values are parsed explicitly
+            if (data.pump1 !== undefined) state.pump1.active = data.pump1 === "ON";
+            if (data.valve1 !== undefined) state.valve1.open = data.valve1 === "OPEN";
+            if (data.valve2 !== undefined) state.valve2.open = data.valve2 === "OPEN";
+            if (data.valve3 !== undefined) state.valve3.open = data.valve3 === "OPEN";
+            if (data.valve4 !== undefined) state.valve4.open = data.valve4 === "OPEN";
+            if (data.valveC1 !== undefined) state.valveC1.open = data.valveC1 === "OPEN";
+            if (data.valveC2 !== undefined) state.valveC2.open = data.valveC2 === "OPEN";
+            if (data.valveC3 !== undefined) state.valveC3.open = data.valveC3 === "OPEN";
+            if (data.valveC4 !== undefined) state.valveC4.open = data.valveC4 === "OPEN";
+            if (data.valveD !== undefined) state.valveD.open = data.valveD === "OPEN";
+
+            // Map pipe diagnostic health status fields if sent from server
+            if (data.statusP1) state.pump1.pipeStatus = data.statusP1;
+            if (data.statusV1) state.valve1.pipeStatus = data.statusV1;
+            if (data.statusV2) state.valve2.pipeStatus = data.statusV2;
+            if (data.statusV3) state.valve3.pipeStatus = data.statusV3;
+            if (data.statusV4) state.valve4.pipeStatus = data.statusV4;
+            if (data.statusVC1) state.valveC1.pipeStatus = data.statusVC1;
+            if (data.statusVC2) state.valveC2.pipeStatus = data.statusVC2;
+            if (data.statusVC3) state.valveC3.pipeStatus = data.statusVC3;
+            if (data.statusVC4) state.valveC4.pipeStatus = data.statusVC4;
+            if (data.statusVD) state.valveD.pipeStatus = data.statusVD;
+
+            // Well level sensor (1-4)
+            if (data.wellLevel !== undefined) {
+                const n = parseInt(data.wellLevel, 10);
+                if (n >= 1 && n <= 4) wellState.level = n;
+            }
+
+            // Emergency valve: reported state only latches as manual when not auto-triggered
+            if (data.valveEM !== undefined && !state.valveEM.auto) state.valveEM.manual = data.valveEM === "OPEN";
+            if (data.statusVEM) state.valveEM.pipeStatus = data.statusVEM;
+
+            // D->E link valve and Field E endpoint valves (valveDE, valveE1..valveE8 / statusVDE, statusVE1..statusVE8)
+            ['valveDE','valveE1','valveE2','valveE3','valveE4','valveE5','valveE6','valveE7','valveE8'].forEach(k => {
+                if (data[k] !== undefined) state[k].open = data[k] === "OPEN";
+                const sk = 'status' + 'V' + k.slice(5);
+                if (data[sk]) state[k].pipeStatus = data[sk];
+            });
+
+            recomputeSCADANetworkTopology();
+        }
+
+        // Modal Action Dialog Controller
+        function openControlModal(nodeId, titleText) {
+            activeTargetNode = nodeId;
+            document.getElementById('control-modal').classList.remove('hidden');
+            document.getElementById('modal-node-title').innerText = titleText;
+            document.getElementById('modal-node-id').innerText = `Hardware Node Identifier: ${nodeId}`;
+            
+            const isPump = nodeId === 'pump1';
+            const nodeData = state[nodeId];
+            const currentActState = isPump ? (nodeData.active ? 'RUNNING' : 'STOPPED') : (nodeData.open ? 'OPEN' : 'CLOSED');
+            
+            const statusLabel = document.getElementById('modal-current-state');
+            statusLabel.innerText = currentActState;
+            statusLabel.className = `text-xs font-bold px-2 py-0.5 rounded ${
+                (nodeData.active || nodeData.open) ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+            }`;
+
+            document.getElementById('modal-status-select').value = nodeData.pipeStatus;
+
+            const actionBtn = document.getElementById('modal-action-btn');
+            actionBtn.innerText = isPump ? (nodeData.active ? 'SHUTDOWN PUMP' : 'START UP PUMP') : (nodeData.open ? 'CLOSE VALVE' : 'OPEN VALVE');
+            actionBtn.className = `px-4 py-2 text-white font-bold rounded text-xs transition ${
+                (nodeData.active || nodeData.open) ? 'bg-rose-600 hover:bg-rose-500' : 'bg-emerald-600 hover:bg-emerald-500'
+            }`;
+
+            actionBtn.onclick = function() {
+                const targetState = isPump ? !nodeData.active : !nodeData.open;
+
+                if (!isArmed()) {
+                    document.getElementById('modal-node-id').innerText = 'CONTROLS NOT ARMED - press ARM CONTROLS in the header first';
+                    logEvent('warn', 'Command rejected (controls not armed): ' + nodeId);
+                    return;
+                }
+
+                // Dry-run lockout: pump cannot be started when well is at level 1
+                if (isPump && targetState && wellState.level <= 1) {
+                    closeControlModal();
+                    recomputeSCADANetworkTopology();
+                    return;
+                }
+                
+                // Set localized simulation value immediately
+                const live = isLive();
+                if (!live) {   // simulation mode only; live mode waits for controller confirmation
+                    if (isPump) state[nodeId].active = targetState;
+                    else state[nodeId].open = targetState;
+                    if (nodeId === 'valveEM') state.valveEM.manual = targetState;
+                }
+                logEvent('info', 'OPERATOR: ' + nodeId + ' ' + (isPump ? (targetState ? 'START' : 'STOP') : (targetState ? 'OPEN' : 'CLOSE')) + (live ? ' - sent, awaiting confirmation' : ' (simulation)'));
+                
+                if (!isLive()) state[nodeId].pipeStatus = document.getElementById('modal-status-select').value;
+
+                // Dispatch MQTT actuate instruction frame if live broker connected
+                if (mqttClient && mqttClient.connected) {
+                    const pubTopic = document.getElementById('mqtt-pub-topic').value;
+                    const commandPayload = {
+                        device: nodeId,
+                        command: isPump ? (targetState ? "START" : "STOP") : (targetState ? "OPEN" : "CLOSE"),
+                        timestamp: Date.now()
+                    };
+                    mqttClient.publish(pubTopic, JSON.stringify(commandPayload), { qos: 1 });
+                    registerPending(nodeId, targetState, isPump);
+                }
+
+                closeControlModal();
+                recomputeSCADANetworkTopology();
+            };
+        }
+
+        function closeControlModal() {
+            document.getElementById('control-modal').classList.add('hidden');
+            activeTargetNode = null;
+        }
+
+        // Core Mathematical SCADA Vector Render Pipeline Engine Mapping
+        function recomputeSCADANetworkTopology() {
+            // Mapping system statuses to industrial HEX color configurations
+            const colorMap = { ok: '#10b981', warning: '#f59e0b', critical: '#ef4444', off: '#475569' };
+            const strokeMap = { ok: 6, warning: 6, critical: 8, off: 4 };
+
+            // Determine local fluid pressure branches flowing throughout nodes
+            // Dry-run protection: trip pump if well is at critical level 1
+            if (wellState.level <= 1 && state.pump1.active) {
+                state.pump1.active = false;
+                if (mqttClient && mqttClient.connected) {
+                    mqttClient.publish(document.getElementById('mqtt-pub-topic').value, JSON.stringify({
+                        device: 'pump1', command: 'STOP', reason: 'DRY_RUN_PROTECTION', timestamp: Date.now()
+                    }));
+                }
+            }
+
+            const hasWaterFromPump = state.pump1.active;
+            const flowV1 = hasWaterFromPump && state.valve1.open;
+            
+            const flowV2 = flowV1 && state.valve2.open;
+            const flowV3 = flowV1 && state.valve3.open;
+            const flowV4 = flowV1 && state.valve4.open;
+
+            const flowD = flowV4 && state.valveD.open;
+
+            // Flow configuration to multi branch systems inside Field C
+            const flowC1 = flowV4 && state.valveC1.open;
+            const flowC2 = flowV4 && state.valveC2.open;
+            const flowC3 = flowV4 && state.valveC3.open;
+            const flowC4 = flowV4 && state.valveC4.open;
+
+            // Compute local pipeline segment coloring updates dynamically
+            updatePipeLine('pipe-pump-v1', hasWaterFromPump, state.pump1.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-v1-split', flowV1, state.valve1.pipeStatus, colorMap, strokeMap);
+            
+            updatePipeLine('pipe-split-v2', flowV1, state.valve2.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-v2-fieldA', flowV2, state.valve2.pipeStatus, colorMap, strokeMap);
+
+            updatePipeLine('pipe-split-v3', flowV1, state.valve3.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-v3-fieldB', flowV3, state.valve3.pipeStatus, colorMap, strokeMap);
+
+            updatePipeLine('pipe-split-trunk2', flowV1, state.valve4.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-v4-splitCD', flowV4, state.valve4.pipeStatus, colorMap, strokeMap);
+
+            // Field D pipeline segments
+            updatePipeLine('pipe-split-vD', flowV4, state.valveD.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-vD-fieldD', flowD, state.valveD.pipeStatus, colorMap, strokeMap);
+
+            // Field C common line manifold segment
+            updatePipeLine('pipe-split-manifoldC', flowV4, 'ok', colorMap, strokeMap);
+
+            // Field C individual segments
+            updatePipeLine('pipe-manifold-vC1', fillSubFlow(flowV4, state.valveC1.open), state.valveC1.pipeStatus, colorMap, strokeMap, 4);
+            updatePipeLine('pipe-vC1-out', flowC1, state.valveC1.pipeStatus, colorMap, strokeMap, 4);
+
+            updatePipeLine('pipe-manifold-vC2', fillSubFlow(flowV4, state.valveC2.open), state.valveC2.pipeStatus, colorMap, strokeMap, 4);
+            updatePipeLine('pipe-vC2-out', flowC2, state.valveC2.pipeStatus, colorMap, strokeMap, 4);
+
+            updatePipeLine('pipe-manifold-vC3', fillSubFlow(flowV4, state.valveC3.open), state.valveC3.pipeStatus, colorMap, strokeMap, 4);
+            updatePipeLine('pipe-vC3-out', flowC3, state.valveC3.pipeStatus, colorMap, strokeMap, 4);
+
+            updatePipeLine('pipe-manifold-vC4', fillSubFlow(flowV4, state.valveC4.open), state.valveC4.pipeStatus, colorMap, strokeMap, 4);
+            updatePipeLine('pipe-vC4-out', flowC4, state.valveC4.pipeStatus, colorMap, strokeMap, 4);
+
+            // ---- D -> E extension ----
+            const flowDE = flowD && state.valveDE.open;
+            updatePipeLine('pipe-D-vDE', flowD, state.valveDE.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-vDE-manifoldE', flowDE, state.valveDE.pipeStatus, colorMap, strokeMap);
+            updatePipeLine('pipe-manifoldE-spine', flowDE, 'ok', colorMap, strokeMap);
+            updateNodeIconState('valveDE', state.valveDE.open, '#10b981', '#ef4444');
+
+            const rateE = [];
+            for (let i = 1; i <= 8; i++) {
+                const v = state['valveE' + i];
+                const flowEi = flowDE && v.open;
+                updatePipeLine('pipe-E-b' + i, flowDE, v.pipeStatus, colorMap, strokeMap, 4);
+                updatePipeLine('pipe-E-o' + i, flowEi, v.pipeStatus, colorMap, strokeMap, 4);
+                updateSubValveIconState('valveE' + i, v.open);
+                rateE.push(flowEi ? (v.pipeStatus === 'warning' ? 2.5 : v.pipeStatus === 'critical' ? 0.5 : 6.0) : 0);
+            }
+            const rateE_Total = rateE.reduce((a, b) => a + b, 0);
+
+            // ---- Emergency relief valve (dead-head protection) ----
+            const anyConsumerPath = flowV2 || flowV3 || flowD || flowC1 || flowC2 || flowC3 || flowC4 || rateE.some(r => r > 0);
+            const emAuto = state.valve1.open && !anyConsumerPath;   // V1 open while every downstream valve is closed
+            if (emAuto !== state.valveEM.auto) {
+                state.valveEM.auto = emAuto;
+                if (mqttClient && mqttClient.connected) {
+                    mqttClient.publish(document.getElementById('mqtt-pub-topic').value, JSON.stringify({
+                        device: 'valveEM', command: emAuto ? 'OPEN' : 'CLOSE', reason: 'DEADHEAD_PROTECTION', timestamp: Date.now()
+                    }));
+                }
+            }
+            state.valveEM.open = state.valveEM.manual || emAuto;
+            const flowEM = hasWaterFromPump && state.valveEM.open;
+            updatePipeLine('pipe-pump-em', flowEM, state.valveEM.pipeStatus, colorMap, strokeMap, 3);
+            updatePipeLine('pipe-em-out', flowEM, state.valveEM.pipeStatus, colorMap, strokeMap, 3);
+            updateNodeIconState('valveEM', state.valveEM.open, '#f59e0b', '#ef4444');
+            const rateBypass = flowEM ? 45.0 : 0;
+
+            function fillSubFlow(parentFlow, localOpen) {
+                return parentFlow; // parent line has water up to the input selector node
+            }
+
+            // Update Graphical Node Visual States
+            updateNodeIconState('pump1', state.pump1.active, '#38bdf8', '#ef4444');
+            updateNodeIconState('valve1', state.valve1.open, '#10b981', '#ef4444');
+            updateNodeIconState('valve2', state.valve2.open, '#10b981', '#ef4444');
+            updateNodeIconState('valve3', state.valve3.open, '#10b981', '#ef4444');
+            updateNodeIconState('valve4', state.valve4.open, '#10b981', '#ef4444');
+            updateNodeIconState('valveD', state.valveD.open, '#10b981', '#ef4444');
+
+            updateSubValveIconState('valveC1', state.valveC1.open);
+            updateSubValveIconState('valveC2', state.valveC2.open);
+            updateSubValveIconState('valveC3', state.valveC3.open);
+            updateSubValveIconState('valveC4', state.valveC4.open);
+
+            // Numerical flow volumetric simulation logic tracking
+            const rateA = flowV2 ? (state.valve2.pipeStatus === 'warning' ? 18.5 : state.valve2.pipeStatus === 'critical' ? 4.2 : 35.0) : 0;
+            const rateB = flowV3 ? (state.valve3.pipeStatus === 'warning' ? 12.0 : state.valve3.pipeStatus === 'critical' ? 0.0 : 28.5) : 0;
+            const rateD = flowD ? (state.valveD.pipeStatus === 'warning' ? 15.0 : state.valveD.pipeStatus === 'critical' ? 2.0 : 40.0) : 0;
+
+            const rateC1 = flowC1 ? (state.valveC1.pipeStatus === 'warning' ? 5.0 : 12.0) : 0;
+            const rateC2 = flowC2 ? (state.valveC2.pipeStatus === 'warning' ? 4.5 : 12.0) : 0;
+            const rateC3 = flowC3 ? (state.valveC3.pipeStatus === 'warning' ? 6.0 : 12.0) : 0;
+            const rateC4 = flowC4 ? (state.valveC4.pipeStatus === 'warning' ? 3.0 : 12.0) : 0;
+            const rateC_Total = rateC1 + rateC2 + rateC3 + rateC4;
+
+            let overallFlowSum = rateA + rateB + rateD + rateC_Total + rateE_Total;
+            if (isLive() && lastTel && typeof lastTel.totalFlowLpm === 'number') overallFlowSum = lastTel.totalFlowLpm;   // controller is authoritative
+            let primarySystemPressure = hasWaterFromPump ? Math.max(15, 65 - ((overallFlowSum + rateBypass) * 0.25)) : 0;
+            if (isLive() && lastTel && typeof lastTel.pressurePSI === 'number') primarySystemPressure = lastTel.pressurePSI;
+
+            // Render text elements to screen metrics cards
+            document.getElementById('txt-flow-fieldA').innerText = `${rateA.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-fieldB').innerText = `${rateB.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-fieldD').innerText = `${rateD.toFixed(1)} L/m`;
+            
+            document.getElementById('txt-flow-c1').innerText = `${rateC1.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-c2').innerText = `${rateC2.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-c3').innerText = `${rateC3.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-c4').innerText = `${rateC4.toFixed(1)} L/m`;
+            document.getElementById('txt-flow-fieldC-total').innerText = `TOTAL: ${rateC_Total.toFixed(1)} L/m`;
+
+            rateE.forEach((r, idx) => {
+                document.getElementById('txt-flow-e' + (idx + 1)).innerText = `${r.toFixed(1)} L/m`;
+            });
+            document.getElementById('txt-flow-fieldE-total').innerText = `FIELD E TOTAL: ${rateE_Total.toFixed(1)} L/m`;
+
+            document.getElementById('txt-flow-bypass').innerText = `${rateBypass.toFixed(1)} L/m`;
+
+            document.getElementById('stat-pressure').innerText = `${primarySystemPressure.toFixed(1)} PSI`;
+            document.getElementById('stat-total-flow').innerText = `${overallFlowSum.toFixed(1)} L/min`;
+
+            // Adjust live metrics indicators color codes
+            const pressureText = document.getElementById('stat-pressure');
+            if (primarySystemPressure > 55) {
+                pressureText.className = "text-2xl font-bold font-mono text-rose-500";
+            } else if (primarySystemPressure > 0 && primarySystemPressure < 25) {
+                pressureText.className = "text-2xl font-bold font-mono text-amber-400";
+            } else {
+                pressureText.className = "text-2xl font-bold font-mono text-emerald-400";
+            }
+
+            // Well level graphic + readout
+            updatePipeLine('pipe-well-pump', hasWaterFromPump, 'ok', colorMap, strokeMap);
+            const wl = wellState.level;
+            const wellColor = wl === 1 ? '#ef4444' : wl === 2 ? '#f59e0b' : '#38bdf8';
+            for (let i = 1; i <= 4; i++) {
+                document.getElementById('well-seg-' + i).setAttribute('fill', i <= wl ? wellColor : '#1e293b');
+                const lb = document.getElementById('well-lbl-' + i);
+                lb.setAttribute('fill', i === wl ? wellColor : '#64748b');
+            }
+            const wellTxt = document.getElementById('stat-well-level');
+            wellTxt.innerText = `LEVEL ${wl} - ${WELL_NAMES[wl]}`;
+            wellTxt.className = `text-2xl font-bold font-mono ${wl === 1 ? 'text-rose-500' : wl === 2 ? 'text-amber-400' : 'text-cyan-400'}`;
+
+            syncAlarms();
+
+            // Sync integrity sidebar diagnostics view list
+            generateTopologyAlertList();
+        }
+
+        // Helper update functions mapping SVG element attributes
+        function updatePipeLine(elementId, isFlowing, status, colorMap, strokeMap, baseStroke = null) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (isFlowing) {
+                el.setAttribute('stroke', colorMap[status]);
+                el.setAttribute('stroke-width', baseStroke ? baseStroke + 2 : strokeMap[status]);
+                el.className.baseVal = `pipeline ${status}`;
+            } else {
+                el.setAttribute('stroke', colorMap['off']);
+                el.setAttribute('stroke-width', baseStroke || strokeMap['off']);
+                el.className.baseVal = "pipeline off";
+            }
+        }
+
+        function updateNodeIconState(nodeId, isActive, activeHex, inactiveHex) {
+            const lbl = document.getElementById(`lbl-${nodeId}-state`);
+            const icon = document.getElementById(`icon-${nodeId}`);
+            
+            if (lbl) {
+                lbl.innerText = isActive ? (nodeId === 'pump1' ? 'RUNNING' : 'OPEN') : (nodeId === 'pump1' ? 'OFF' : 'CLOSED');
+                lbl.setAttribute('fill', isActive ? '#10b981' : '#ef4444');
+            }
+            if (icon) {
+                icon.setAttribute('fill', isActive ? activeHex : '#64748b');
+            }
+            const borderRect = document.querySelector(`#node-${nodeId} rect`) || document.querySelector(`#node-${nodeId} circle`);
+            if (borderRect) {
+                borderRect.setAttribute('stroke', isActive ? activeHex : '#64748b');
+            }
+        }
+
+        function updateSubValveIconState(nodeId, isOpen) {
+            const icon = document.getElementById(`icon-${nodeId}`);
+            const frame = document.querySelector(`#node-${nodeId} rect`);
+            if (icon) icon.setAttribute('fill', isOpen ? '#10b981' : '#64748b');
+            if (frame) frame.setAttribute('stroke', isOpen ? '#10b981' : '#64748b');
+        }
+
+        function generateTopologyAlertList() {
+            const container = document.getElementById('integrity-status-list');
+            container.innerHTML = '';
+            
+            let anomaliesDetected = 0;
+
+            for (const [key, val] of Object.entries(state)) {
+                if (val.pipeStatus !== 'ok') {
+                    anomaliesDetected++;
+                    const item = document.createElement('div');
+                    item.className = `p-2 rounded border border-slate-800 flex flex-col gap-0.5 ${
+                        val.pipeStatus === 'critical' ? 'bg-rose-950/40 text-rose-300 border-l-2 border-l-rose-500' : 'bg-amber-950/40 text-amber-300 border-l-2 border-l-amber-500'
+                    }`;
+                    item.innerHTML = `
+                        <div class="flex justify-between font-bold text-[10px]">
+                            <span>${key.toUpperCase()} EXCEPTION</span>
+                            <span>${val.pipeStatus.toUpperCase()}</span>
+                        </div>
+                        <div class="text-[9px] text-slate-400">Sensor indicates unusual state variance. Check structural physical joints.</div>
+                    `;
+                    container.appendChild(item);
+                }
+            }
+
+            if (wellState.level <= 2) {
+                anomaliesDetected++;
+                const crit = wellState.level <= 1;
+                const w = document.createElement('div');
+                w.className = `p-2 rounded border border-slate-800 flex flex-col gap-0.5 ${crit ? 'bg-rose-950/40 text-rose-300 border-l-2 border-l-rose-500' : 'bg-amber-950/40 text-amber-300 border-l-2 border-l-amber-500'}`;
+                w.innerHTML = `
+                    <div class="flex justify-between font-bold text-[10px]">
+                        <span>WELL LEVEL ${crit ? 'CRITICAL' : 'LOW'}</span>
+                        <span>L${wellState.level}</span>
+                    </div>
+                    <div class="text-[9px] text-slate-400">${crit ? 'Pump 1 locked out (dry-run protection). Start is blocked until level rises.' : 'Water level is low. Plan to stop irrigation or wait for recharge.'}</div>
+                `;
+                container.insertBefore(w, container.firstChild);
+            }
+
+            if (state.valveEM.open) {
+                anomaliesDetected++;
+                const em = document.createElement('div');
+                em.className = 'p-2 rounded border border-slate-800 flex flex-col gap-0.5 bg-amber-950/40 text-amber-300 border-l-2 border-l-amber-500';
+                em.innerHTML = `
+                    <div class="flex justify-between font-bold text-[10px]">
+                        <span>EMERGENCY VALVE ACTIVE</span>
+                        <span>${state.valveEM.auto ? 'AUTO' : 'MANUAL'}</span>
+                    </div>
+                    <div class="text-[9px] text-slate-400">${state.valveEM.auto ? 'V1 open with all downstream valves closed. Relief branch opened to prevent dead-head pressure.' : 'Relief branch opened manually.'}</div>
+                `;
+                container.insertBefore(em, container.firstChild);
+            }
+
+            if (anomaliesDetected === 0) {
+                container.innerHTML = `
+                    <div class="text-slate-500 text-center py-6 border border-dashed border-slate-800 rounded-lg">
+                        All segments reporting nominal network pressure. Zero SCADA anomalies logged.
+                    </div>
+                `;
+            }
+        }
+
+        // When served from the Pi over http(s): default to the Pi's own broker and auto-connect
+        if (location.protocol === 'http:' || location.protocol === 'https:') {
+            let saved = null;
+            try { saved = localStorage.getItem('scadaCfg'); } catch (e) { /* ignore */ }
+            if (!saved) document.getElementById('mqtt-url').value = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':9001';
+            setTimeout(() => document.getElementById('connect-mqtt-btn').click(), 500);
+        }
+
+        // Run primary visual mapping layout evaluation loop on document load
+        recomputeSCADANetworkTopology();
+    </script>
+</body>
+</html>
